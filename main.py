@@ -4,6 +4,7 @@ sys.path.append(r'C:\Users\Reich\LocalCoding\COLMAP')
 sys.path.append(r'C:\Users\Reich\LocalCoding\API_POINTCLOUD_TEST\Mattern_Prog')
 import Get_IMG_from_VIDEO 
 import prepare_vid_for_colmap_v4
+import simple_RGB_mask as masking
 import os
 import tkinter as tk
 from tkinter import filedialog
@@ -33,8 +34,8 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     os.makedirs(raw_images_path, exist_ok=True)
     Get_IMG_from_VIDEO.get_IMG_from_Video(input_path, raw_images_path)
     
-    selected_image_path = os.path.join(image_output_path, 'sharp_images')
-    os.makedirs(selected_image_path, exist_ok=True)
+    sharp_image_path = os.path.join(image_output_path, 'sharp_images')
+    os.makedirs(sharp_image_path, exist_ok=True)
     
     # Extract sharp and equidistant images
     segments=0.15
@@ -45,23 +46,23 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     }
     sharpness_values = prepare_vid_for_colmap_v4.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v4.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
-    prepare_vid_for_colmap_v4.copy_selected_images(selected_indices, raw_images_path, selected_image_path, image_options)
+    prepare_vid_for_colmap_v4.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
 
-    return selected_image_path
+    return sharp_image_path
 
-def COLMAP_Pipeline(image_output_path: str, workspace_path: str) -> str:
+def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path: str) -> str:
     # Construct the command to execute the batch file
     batch_file_path = os.path.join(os.path.dirname(__file__), 'SIMPLE_COLMAP_PIPLINE.bat')
-    command = f'call "{batch_file_path}" "{workspace_path}" "{image_output_path}"'
+    command = f'call "{batch_file_path}" "{workspace_path}" "{image_output_path}" "{image_mask_path}"'
     
     # Execute the batch file
     os.system(command)
 
-def main():
+def main()->None:
     TEST = True
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP\VID\Ferse_3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test2"
     else:
         root = tk.Tk()
         root.withdraw()  # Hide the root window
@@ -69,8 +70,14 @@ def main():
         video_path = filedialog.askopenfilename(title="Select Video File", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
         workspace_path = filedialog.askdirectory(title="Select Workspace Directory")
     
-    selected_image_path = Video_Pipeline(video_path, workspace_path)
-    COLMAP_Pipeline(selected_image_path, workspace_path)
+    os.makedirs(workspace_path, exist_ok=True)
+    sharp_image_path = Video_Pipeline(video_path, workspace_path)
+    r_thresh = 125
+    g_thresh = 0
+    b_thresh = 0
+    image_mask_path=os.path.join(workspace_path, 'masks')
+    masking.create_masks(sharp_image_path, image_mask_path, r_thresh, g_thresh, b_thresh)
+    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path)
     return 0 
 
 if __name__ == '__main__':
