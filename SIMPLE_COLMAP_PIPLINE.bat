@@ -14,10 +14,6 @@ IF "%OUTPUT_DIR%"=="" (
 )
 
 
-@REM REM Create the output directory if it doesn't exist
-@REM IF NOT EXIST "%OUTPUT_DIR%" (
-@REM     mkdir "%OUTPUT_DIR%"
-@REM )
 
 REM Step 1: Feature Extraction
 IF %IMAGE_PATH%=="" (

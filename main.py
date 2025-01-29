@@ -51,7 +51,10 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     return sharp_image_path
 
 def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path: str) -> str:
+    # construct the command to execute the batch file for creating a .ini file
+    ini_file_command=f'call colmap project_generator --output_path "{workspace_path}\project.ini" --quality high '
     # Construct the command to execute the batch file
+    os.system(ini_file_command)
     batch_file_path = os.path.join(os.path.dirname(__file__), 'SIMPLE_COLMAP_PIPLINE.bat')
     command = f'call "{batch_file_path}" "{workspace_path}" "{image_output_path}" "{image_mask_path}"'
     
@@ -81,4 +84,14 @@ def main()->None:
     return 0 
 
 if __name__ == '__main__':
-    main()
+    #main()
+    video_path = r"C:\Users\Reich\LocalCoding\COLMAP\VID\Ferse_3.mp4"
+    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test3"
+    # os.makedirs(workspace_path, exist_ok=True)
+    # sharp_image_path = Video_Pipeline(video_path, workspace_path)
+    # r_thresh = 125
+    # g_thresh = 0
+    # b_thresh = 0
+    # image_mask_path=os.path.join(workspace_path, 'masks')
+    # masking.create_masks(sharp_image_path, image_mask_path, r_thresh, g_thresh, b_thresh)
+    COLMAP_Pipeline(video_path, workspace_path,video_path)
