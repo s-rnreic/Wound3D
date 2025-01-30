@@ -51,10 +51,13 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     return sharp_image_path
 
 def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path: str) -> str:
+    # Version of PIPLINE which doesnt work with a bat file anymore
+    # Each colmap command is executed with a tempProject.ini file --> file contains the parameter of each colmap command
+    
     # construct the command to execute the batch file for creating a .ini file
     ini_file_command=f'call colmap project_generator --output_path "{workspace_path}\project.ini" --quality high '
-    # Construct the command to execute the batch file
     os.system(ini_file_command)
+    
     batch_file_path = os.path.join(os.path.dirname(__file__), 'SIMPLE_COLMAP_PIPLINE.bat')
     command = f'call "{batch_file_path}" "{workspace_path}" "{image_output_path}" "{image_mask_path}"'
     
