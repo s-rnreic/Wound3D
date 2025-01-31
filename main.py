@@ -1,7 +1,6 @@
 import sys
 import os
-sys.path.append(r'C:\Users\Reich\LocalCoding\COLMAP')
-sys.path.append(r'C:\Users\Reich\LocalCoding\API_POINTCLOUD_TEST\Mattern_Prog')
+sys.path.append(r'C:\Users\Reich\LocalCoding\API_POINTCLOUD_TEST\Mattern_Prog') #local path of prepare_vid_for_colmap_v4.py
 import Get_IMG_from_VIDEO 
 import prepare_vid_for_colmap_v4
 import simple_RGB_mask as masking
@@ -50,6 +49,7 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
 
     return sharp_image_path
 
+# 2. COLMAP Pipeline
 def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path: str) -> str:
     # Version of PIPLINE which doesnt work with a bat file anymore
     # Each colmap command is executed with a tempProject.ini file --> file contains the parameter of each colmap command
@@ -63,6 +63,9 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path:
     
     # Execute the batch file
     os.system(command)
+
+#3. COLMAP RERUN Streaming
+def COLMAP_RERUN(image_output_path: str, workspace_path: str, image_mask_path: str) -> str:
 
 def main()->None:
     TEST = True
