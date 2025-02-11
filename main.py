@@ -3,7 +3,8 @@ import os
 sys.path.append(r'C:\Users\Reich\LocalCoding\API_POINTCLOUD_TEST\Mattern_Prog') #local path of prepare_vid_for_colmap_v4.py
 import Get_IMG_from_VIDEO 
 import prepare_vid_for_colmap_v4
-import simple_RGB_mask as masking
+import mask_creator as masking2
+import create_temp_project_ini as ctpi
 import os
 import tkinter as tk
 from tkinter import filedialog
@@ -55,23 +56,36 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path:
     # Each colmap command is executed with a tempProject.ini file --> file contains the parameter of each colmap command
     
     # construct the command to execute the batch file for creating a .ini file
-    ini_file_command=f'call colmap project_generator --output_path "{workspace_path}\project.ini" --quality high '
-    os.system(ini_file_command)
+    ini_path=ctpi.standard_ini_pipline(workspace_path, image_output_path,image_mask_path)
     
-    batch_file_path = os.path.join(os.path.dirname(__file__), 'SIMPLE_COLMAP_PIPLINE.bat')
-    command = f'call "{batch_file_path}" "{workspace_path}" "{image_output_path}" "{image_mask_path}"'
+    #Feature Extraction
+    keywords = ['HEADER','ImageReader','SiftExtraction']
+    temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
+    os.system(f'call colmap feature_extractor --project_path "{temp_ini_path}"')
     
-    # Execute the batch file
-    os.system(command)
-
-#3. COLMAP RERUN Streaming
-def COLMAP_RERUN(image_output_path: str, workspace_path: str, image_mask_path: str) -> str:
+    #Feature Matching
+    keywords = ['HEADER','SiftMatching','TwoViewGeometry','ExhaustiveMatching']
+    temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
+    ctpi.delete_keywords_from_project_ini(temp_ini_path, 'HEADER','image_path')
+    os.system(f'call colmap exhaustive_matcher --project_path "{temp_ini_path}"')
+    
+    
+    #Mapping
+    sparse_path = os.path.join(workspace_path, 'sparse')
+    os.makedirs(sparse_path, exist_ok=True)
+    keywords = ['HEADER','Mapper']
+    temp_ini_path = ctpi.create_temp_project_ini(ini_path, *keywords)
+    ctpi.insert_lines_at_beginning_of_ini_file(temp_ini_path, lines=[f'output_path = {sparse_path}\n'])
+    os.system(f'call colmap mapper --project_path "{temp_ini_path}"')
+    
+    # #3. COLMAP RERUN Streaming
+    # def COLMAP_RERUN(image_output_path: str, workspace_path: str, image_mask_path: str) -> str:
 
 def main()->None:
     TEST = True
     if TEST:
-        video_path = r"C:\Users\Reich\LocalCoding\COLMAP\VID\Ferse_3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test2"
+        video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test"
     else:
         root = tk.Tk()
         root.withdraw()  # Hide the root window
@@ -81,23 +95,10 @@ def main()->None:
     
     os.makedirs(workspace_path, exist_ok=True)
     sharp_image_path = Video_Pipeline(video_path, workspace_path)
-    r_thresh = 125
-    g_thresh = 0
-    b_thresh = 0
     image_mask_path=os.path.join(workspace_path, 'masks')
-    masking.create_masks(sharp_image_path, image_mask_path, r_thresh, g_thresh, b_thresh)
+    masking2.process_folder(sharp_image_path, image_mask_path)
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path)
     return 0 
 
 if __name__ == '__main__':
-    #main()
-    video_path = r"C:\Users\Reich\LocalCoding\COLMAP\VID\Ferse_3.mp4"
-    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test3"
-    # os.makedirs(workspace_path, exist_ok=True)
-    # sharp_image_path = Video_Pipeline(video_path, workspace_path)
-    # r_thresh = 125
-    # g_thresh = 0
-    # b_thresh = 0
-    # image_mask_path=os.path.join(workspace_path, 'masks')
-    # masking.create_masks(sharp_image_path, image_mask_path, r_thresh, g_thresh, b_thresh)
-    COLMAP_Pipeline(video_path, workspace_path,video_path)
+    main()
