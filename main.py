@@ -1,14 +1,12 @@
 import sys
 import os
-sys.path.append(r'C:\Users\Reich\LocalCoding\API_POINTCLOUD_TEST\Mattern_Prog') #local path of prepare_vid_for_colmap_v4.py
-import Get_IMG_from_VIDEO 
-import prepare_vid_for_colmap_v4
+import prepare_vid_for_colmap_v5
 import mask_creator as masking2
 import create_temp_project_ini as ctpi
-import os
+import subprocess
 import tkinter as tk
 from tkinter import filedialog
-#import pycolmap 
+# import pycolmap 
 
 # user inserts a input_path and a workspace_path
 # workspace_path : path to a folder where all images (raw,sharp), the colmap data will be saved
@@ -32,7 +30,8 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     # Create images out of Video
     raw_images_path = os.path.join(image_output_path, 'raw_images')
     os.makedirs(raw_images_path, exist_ok=True)
-    Get_IMG_from_VIDEO.get_IMG_from_Video(input_path, raw_images_path)
+    prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
+
     
     sharp_image_path = os.path.join(image_output_path, 'sharp_images')
     os.makedirs(sharp_image_path, exist_ok=True)
@@ -44,9 +43,9 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
         #'square_crop': True,
         # 'crop' : .8,
     }
-    sharpness_values = prepare_vid_for_colmap_v4.get_image_sharpness(raw_images_path, image_options)
-    selected_indices = prepare_vid_for_colmap_v4.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
-    prepare_vid_for_colmap_v4.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
+    sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
+    selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
+    prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
 
     return sharp_image_path
 
@@ -81,6 +80,18 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path:
     # #3. COLMAP RERUN Streaming
     # def COLMAP_RERUN(image_output_path: str, workspace_path: str, image_mask_path: str) -> str:
 
+def ANALYSE_COLMAP_OUTPUT(workspace_path: str) -> None:
+    # Analyse the output of the COLMAP pipeline
+    
+    # Analyse the sparse folder
+    sparse_path = os.path.join(workspace_path, 'sparse')
+    subfolders = [os.path.join(sparse_path, subfolder) for subfolder in os.listdir(sparse_path) if os.path.isdir(os.path.join(sparse_path, subfolder))]
+    
+    for subfolder in subfolders:
+        result = subprocess.run(f"colmap model_analyzer --path {subfolder}", shell=True, capture_output=True, text=True)
+        
+        
+
 def main()->None:
     TEST = True
     if TEST:
@@ -101,4 +112,6 @@ def main()->None:
     return 0 
 
 if __name__ == '__main__':
-    main()
+    video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
+    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test"
+    ANALYSE_COLMAP_OUTPUT(workspace_path)
