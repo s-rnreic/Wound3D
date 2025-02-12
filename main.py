@@ -6,6 +6,7 @@ import create_temp_project_ini as ctpi
 import subprocess
 import tkinter as tk
 from tkinter import filedialog
+import build_masks as masking
 # import pycolmap 
 
 # user inserts a input_path and a workspace_path
@@ -47,7 +48,10 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
 
-    return sharp_image_path
+    image_mask_path=os.path.join(workspace_path, 'masks')
+    masking.process_folder(sharp_image_path, image_mask_path)
+
+    return sharp_image_path, image_mask_path
 
 # 2. COLMAP Pipeline
 def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path: str) -> str:
@@ -94,6 +98,7 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str) -> None:
 
 def main()->None:
     TEST = True
+    global workspace_path 
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
         workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test"
@@ -105,13 +110,13 @@ def main()->None:
         workspace_path = filedialog.askdirectory(title="Select Workspace Directory")
     
     os.makedirs(workspace_path, exist_ok=True)
-    sharp_image_path = Video_Pipeline(video_path, workspace_path)
-    image_mask_path=os.path.join(workspace_path, 'masks')
-    masking2.process_folder(sharp_image_path, image_mask_path)
+    sharp_image_path, image_mask_path = Video_Pipeline(video_path, workspace_path)
+    
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path)
     return 0 
 
 if __name__ == '__main__':
     video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
-    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test"
-    ANALYSE_COLMAP_OUTPUT(workspace_path)
+    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test2"
+    Video_Pipeline(video_path, workspace_path)
+    # ANALYSE_COLMAP_OUTPUT(workspace_path)
