@@ -1,7 +1,6 @@
 import sys
 import os
 import prepare_vid_for_colmap_v5
-import mask_creator as masking2
 import create_temp_project_ini as ctpi
 import subprocess
 import tkinter as tk
@@ -93,7 +92,7 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str) -> None:
     
     for subfolder in subfolders:
         result = subprocess.run(f"colmap model_analyzer --path {subfolder}", shell=True, capture_output=True, text=True)
-        
+        print(result.stdout)
         
 
 def main()->None:
@@ -116,7 +115,7 @@ def main()->None:
     return 0 
 
 if __name__ == '__main__':
-    video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
-    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test2"
+    video_path = r"C:\Users\Reich\LocalCoding\Wundbilder\fuss\Loch_vorne_v1.mp4"
+    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test3"
     Video_Pipeline(video_path, workspace_path)
     # ANALYSE_COLMAP_OUTPUT(workspace_path)
