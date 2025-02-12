@@ -21,20 +21,24 @@ import build_masks as masking
 #   |_ project.ini 
 #
 
+
+
+
+def create_workspace(workspace_path:str)->None:
+    global raw_images_path, sharp_image_path, image_mask_path
+    os.makedirs(workspace_path, exist_ok=True)
+    raw_images_path = os.path.join(workspace_path, 'raw_images')
+    os.makedirs(raw_images_path, exist_ok=True)
+    sharp_image_path = os.path.join(workspace_path, 'sharp_images')
+    os.makedirs(sharp_image_path, exist_ok=True)
+    image_mask_path=os.path.join(workspace_path, 'masks')
+
 #1. Analyse Video and extract image
 def Video_Pipeline( input_path:str, image_output_path:str)->str:
     # input_path : path to the video 
     # output_path: path where the extracted images are saved at --> when it doesnt exist --> created
-    
-    
-    # Create images out of Video
-    raw_images_path = os.path.join(image_output_path, 'raw_images')
-    os.makedirs(raw_images_path, exist_ok=True)
-    prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
 
-    
-    sharp_image_path = os.path.join(image_output_path, 'sharp_images')
-    os.makedirs(sharp_image_path, exist_ok=True)
+    prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
     
     # Extract sharp and equidistant images
     segments=0.15
@@ -46,8 +50,6 @@ def Video_Pipeline( input_path:str, image_output_path:str)->str:
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
-
-    image_mask_path=os.path.join(workspace_path, 'masks')
     masking.process_folder(sharp_image_path, image_mask_path)
 
     return sharp_image_path, image_mask_path
@@ -58,7 +60,7 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path:
     # Each colmap command is executed with a tempProject.ini file --> file contains the parameter of each colmap command
     
     # construct the command to execute the batch file for creating a .ini file
-    ini_path=ctpi.standard_ini_pipline(workspace_path, image_output_path,image_mask_path)
+    
     
     #Feature Extraction
     keywords = ['HEADER','ImageReader','SiftExtraction']
@@ -93,11 +95,16 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str) -> None:
     for subfolder in subfolders:
         result = subprocess.run(f"colmap model_analyzer --path {subfolder}", shell=True, capture_output=True, text=True)
         print(result.stdout)
+
+def open_ini_in_editor(ini_path: str) -> None:
+    editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
+    subprocess.call([editor, ini_path])
         
 
 def main()->None:
     TEST = True
-    global workspace_path 
+    global workspace_path, ini_path, sharp_image_path, raw_images_path
+    
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
         workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test"
@@ -108,14 +115,22 @@ def main()->None:
         video_path = filedialog.askopenfilename(title="Select Video File", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
         workspace_path = filedialog.askdirectory(title="Select Workspace Directory")
     
-    os.makedirs(workspace_path, exist_ok=True)
-    sharp_image_path, image_mask_path = Video_Pipeline(video_path, workspace_path)
+    create_workspace(workspace_path)
+    
+    ini_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
+    open_ini_in_editor(ini_path)
+    
+    Video_Pipeline(video_path, workspace_path)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path)
+    
+    ANALYSE_COLMAP_OUTPUT(workspace_path)
+    
     return 0 
 
 if __name__ == '__main__':
     video_path = r"C:\Users\Reich\LocalCoding\Wundbilder\fuss\Loch_vorne_v1.mp4"
     workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test3"
-    Video_Pipeline(video_path, workspace_path)
+    #Video_Pipeline(video_path, workspace_path)
     # ANALYSE_COLMAP_OUTPUT(workspace_path)
+    main()
