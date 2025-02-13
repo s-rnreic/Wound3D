@@ -6,6 +6,7 @@ import subprocess
 import tkinter as tk
 from tkinter import filedialog
 import build_masks as masking
+import rerun_viewer
 # import pycolmap 
 
 # user inserts a input_path and a workspace_path
@@ -83,7 +84,8 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str,image_mask_path:
     os.system(f'call colmap mapper --project_path "{temp_ini_path}"')
     
     # #3. COLMAP RERUN Streaming
-    # def COLMAP_RERUN(image_output_path: str, workspace_path: str, image_mask_path: str) -> str:
+def COLMAP_RERUN(workspace_path:str) -> None:
+    rerun_viewer.Rerun_Colmap_Pipeline(workspace_path)
 
 def ANALYSE_COLMAP_OUTPUT(workspace_path: str) -> None:
     # Analyse the output of the COLMAP pipeline
@@ -94,7 +96,7 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str) -> None:
     
     for subfolder in subfolders:
         result = subprocess.run(f"colmap model_analyzer --path {subfolder}", shell=True, capture_output=True, text=True)
-        print(result.stdout)
+        print(result.stderr)
 
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
@@ -118,6 +120,7 @@ def main()->None:
     create_workspace(workspace_path)
     
     ini_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
+    
     open_ini_in_editor(ini_path)
     
     Video_Pipeline(video_path, workspace_path)
@@ -126,11 +129,17 @@ def main()->None:
     
     ANALYSE_COLMAP_OUTPUT(workspace_path)
     
+    COLMAP_RERUN(workspace_path)
+    
+    
+    
     return 0 
 
 if __name__ == '__main__':
-    video_path = r"C:\Users\Reich\LocalCoding\Wundbilder\fuss\Loch_vorne_v1.mp4"
-    workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test3"
+    # video_path = r"C:\Users\Reich\LocalCoding\Wundbilder\fuss\Loch_vorne_v1.mp4"
+    # workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test3"
     #Video_Pipeline(video_path, workspace_path)
     # ANALYSE_COLMAP_OUTPUT(workspace_path)
-    main()
+    #main()
+    #ANALYSE_COLMAP_OUTPUT(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
+    COLMAP_RERUN(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test_Muetze_MehrFeature")
