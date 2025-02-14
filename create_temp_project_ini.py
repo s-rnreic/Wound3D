@@ -32,7 +32,7 @@ def setup_project_ini(workspace_path: str, *keywords) -> str:
         config.write(configfile)
 
 
-    return project_ini_path
+    return project_ini_path, database_path
    
 def insert_lines_at_beginning_of_ini_file(file_path: str, lines: list):
     with open(file_path, 'r', encoding='utf-8') as file:
@@ -138,12 +138,12 @@ def execute_tepm_project_ini(ini_path, *keywords):
     os.system(command)
 
 def standard_ini_pipline(workspace_path, image_path, mask_path, *keywords):
-    ini_path=setup_project_ini(workspace_path)
+    ini_path, database_path=setup_project_ini(workspace_path)
     insert_keywords_to_project_ini(ini_path, 'HEADER', 'image_path', image_path)
     insert_keywords_to_project_ini(ini_path, 'ImageReader', 'mask_path', mask_path)
     insert_keywords_to_project_ini(ini_path, 'StereoFusion', 'mask_path', mask_path)
     
-    return ini_path
+    return ini_path, database_path
     
     
 
