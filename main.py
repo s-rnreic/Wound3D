@@ -3,6 +3,7 @@ import os
 import prepare_vid_for_colmap_v5
 import create_temp_project_ini as ctpi
 import create_temp_glomap_ini as ctgi
+import sfm_database
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, simpledialog  # Add simpledialog for user input
@@ -77,6 +78,14 @@ def get_user_input():
 def log_time(log_file, step, elapsed_time):
     with open(log_file, 'a') as f:
         f.write(f"{step}: {elapsed_time:.2f} seconds\n")
+
+def calculate_total_elapsed_time(log_file):
+    total_time = 0.0
+    with open(log_file, 'r') as f:
+        for line in f:
+            time_str = line.split(':')[-1].strip().split()[0]
+            total_time += float(time_str)
+    return total_time
 
 def create_workspace(workspace_path:str)->None:
     global raw_images_path, sharp_image_path, image_mask_path
@@ -154,6 +163,9 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str, log_file: str = None) -> None:
     if log_file and os.path.exists(log_file):
         log_time(log_file, "ANALYSE_COLMAP_OUTPUT", elapsed_time)
 
+def Database_Pipeline(workspace_path:str, log_file:str)->None:
+    pass
+
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
     subprocess.call([editor, ini_path])
@@ -165,7 +177,7 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\05_reso_05_sharp"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\test"
     else:
         root = tk.Tk()
         root.withdraw()  # Hide the root window
@@ -178,8 +190,9 @@ def main()->None:
     
     #segments, image_options = get_user_input()
     segments = 0.5
+    resize_factor = 0.5
     image_options = {
-        'reduce_size': 0.5,
+        'reduce_size': resize_factor,
         #'square_crop': True,
         #'crop': 0.8,
     }
@@ -195,7 +208,12 @@ def main()->None:
     
     COLMAP_RERUN(workspace_path, log_file)
     
+    total_elapsed_time = calculate_total_elapsed_time(log_file)
+    print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
     
+    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark'
+    
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description='Trails with 20% resolution and 50% of the number of images', resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
     
     return 0 
 
