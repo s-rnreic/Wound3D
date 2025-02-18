@@ -105,7 +105,7 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
 
 
 if __name__ == '__main__':
-    folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\02_reso_05_sharp'
+    folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\05_reso_05_sharp'
     database_path=r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\Trial.db'
     setup_database(r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark')
-    load_existing_experiments(database_path, folder_path, experiment_description='Trails with 20% resolution and 50% of the number of images', resize_factor=1, fraction_of_images=0.05, elapsed_time=100)
+    load_existing_experiments(database_path, folder_path, experiment_description='Trails with 50% resolution and 50% of the number of images', resize_factor=0.5, fraction_of_images=0.5, elapsed_time=75)

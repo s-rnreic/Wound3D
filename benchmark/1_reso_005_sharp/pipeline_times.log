@@ -1,0 +1,4 @@
+Video_Pipeline: 16.26 seconds
+COLMAP_Pipeline: 22.39 seconds
+ANALYSE_COLMAP_OUTPUT: 0.16 seconds
+COLMAP_RERUN: 3.29 seconds
