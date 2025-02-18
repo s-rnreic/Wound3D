@@ -96,15 +96,22 @@ def create_workspace(workspace_path:str)->None:
     os.makedirs(sharp_image_path, exist_ok=True)
     image_mask_path=os.path.join(workspace_path, 'masks')
 
+def append_to_total_project_ini(temp_ini_path, total_ini_path):
+    with open(temp_ini_path, 'r') as temp_file:
+        temp_data = temp_file.read()
+    with open(total_ini_path, 'a') as total_file:
+        total_file.write(temp_data + '\n')
+        total_file.write('---NextPart\n')
+
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict)->str:
+def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
     
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
-    masking.process_folder(sharp_image_path, image_mask_path)
+    #masking.process_folder(sharp_image_path, image_mask_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
@@ -113,6 +120,7 @@ def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segment
 def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path: str, log_file: str) -> str:
     start_time = time.time()
     global sparse_path
+    total_ini_path = os.path.join(workspace_path, 'total_project.ini')
     # Version of PIPLINE which doesnt work with a bat file anymore
     # Each colmap command is executed with a tempProject.ini file --> file contains the parameter of each colmap command
     # construct the command to execute the batch file for creating a .ini file
@@ -121,22 +129,23 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     keywords = ['HEADER','ImageReader','SiftExtraction']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
     os.system(f'call colmap feature_extractor --project_path "{temp_ini_path}"')
+    append_to_total_project_ini(temp_ini_path, total_ini_path)
     
     #Feature Matching
     keywords = ['HEADER','SiftMatching','TwoViewGeometry','ExhaustiveMatching']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
     ctpi.delete_keywords_from_project_ini(temp_ini_path, 'HEADER','image_path')
     os.system(f'call colmap exhaustive_matcher --project_path "{temp_ini_path}"')
+    append_to_total_project_ini(temp_ini_path, total_ini_path)
     
     
     #Mapping
     sparse_path = os.path.join(workspace_path, 'sparse')
     os.makedirs(sparse_path, exist_ok=True)
     ctgi.create_glomap_ini(workspace_path + '\\glomap_config.ini')
-    time.sleep(2)
     open_ini_in_editor(workspace_path + '\\glomap_config.ini')
-    time.sleep(2)
     ctgi.execute_glomap(workspace_path + '\\glomap_config.ini', database_path, sparse_path, sharp_image_path)
+    append_to_total_project_ini(workspace_path + '\\glomap_config.ini', total_ini_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_Pipeline", elapsed_time)
 
@@ -148,10 +157,9 @@ def COLMAP_RERUN(workspace_path:str, log_file:str) -> None:
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_RERUN", elapsed_time)
 
-def ANALYSE_COLMAP_OUTPUT(workspace_path: str, log_file: str = None) -> None:
+def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str = None) -> None:
     start_time = time.time()
     # Analyse the output of the COLMAP pipeline
-    
     # Analyse the sparse folder
     subfolders = [os.path.join(sparse_path, subfolder) for subfolder in os.listdir(sparse_path) if os.path.isdir(os.path.join(sparse_path, subfolder))]
     
@@ -177,7 +185,7 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\test"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask"
     else:
         root = tk.Tk()
         root.withdraw()  # Hide the root window
@@ -189,8 +197,8 @@ def main()->None:
     create_workspace(workspace_path)
     
     #segments, image_options = get_user_input()
-    segments = 0.5
-    resize_factor = 0.5
+    segments = 0.05
+    resize_factor = 1.0
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
@@ -204,16 +212,16 @@ def main()->None:
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    ANALYSE_COLMAP_OUTPUT(workspace_path, log_file)
+    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
     COLMAP_RERUN(workspace_path, log_file)
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
     print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
     
-    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark'
+    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
     
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description='Trails with 20% resolution and 50% of the number of images', resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description='Trails with 100% resolution and 5% of the number of images', resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
     
     return 0 
 

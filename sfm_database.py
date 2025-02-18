@@ -49,7 +49,7 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
     cursor = conn.cursor()
     
     # Load project.ini
-    project_ini_path = os.path.join(folder_path, 'project.ini')
+    project_ini_path = os.path.join(folder_path, 'total_project.ini')
     with open(project_ini_path, 'r') as file:
         project_ini = file.read()
     
