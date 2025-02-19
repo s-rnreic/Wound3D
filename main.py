@@ -96,12 +96,7 @@ def create_workspace(workspace_path:str)->None:
     os.makedirs(sharp_image_path, exist_ok=True)
     image_mask_path=os.path.join(workspace_path, 'masks')
 
-def append_to_total_project_ini(temp_ini_path, total_ini_path):
-    with open(temp_ini_path, 'r') as temp_file:
-        temp_data = temp_file.read()
-    with open(total_ini_path, 'a') as total_file:
-        total_file.write(temp_data + '\n')
-        total_file.write('---NextPart\n')
+
 
 #1. Analyse Video and extract image
 def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict , Masking:bool=True)->str:
@@ -129,14 +124,14 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     keywords = ['HEADER','ImageReader','SiftExtraction']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
     os.system(f'call colmap feature_extractor --project_path "{temp_ini_path}"')
-    append_to_total_project_ini(temp_ini_path, total_ini_path)
+    ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
     
     #Feature Matching
     keywords = ['HEADER','SiftMatching','TwoViewGeometry','ExhaustiveMatching']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
     ctpi.delete_keywords_from_project_ini(temp_ini_path, 'HEADER','image_path')
     os.system(f'call colmap exhaustive_matcher --project_path "{temp_ini_path}"')
-    append_to_total_project_ini(temp_ini_path, total_ini_path)
+    ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
     
     
     #Mapping
@@ -145,7 +140,7 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     ctgi.create_glomap_ini(workspace_path + '\\glomap_config.ini')
     open_ini_in_editor(workspace_path + '\\glomap_config.ini')
     ctgi.execute_glomap(workspace_path + '\\glomap_config.ini', database_path, sparse_path, sharp_image_path)
-    append_to_total_project_ini(workspace_path + '\\glomap_config.ini', total_ini_path)
+    ctpi.append_to_total_project_ini(workspace_path + '\\glomap_config.ini', total_ini_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_Pipeline", elapsed_time)
 
@@ -171,8 +166,6 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str =
     if log_file and os.path.exists(log_file):
         log_time(log_file, "ANALYSE_COLMAP_OUTPUT", elapsed_time)
 
-def Database_Pipeline(workspace_path:str, log_file:str)->None:
-    pass
 
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')

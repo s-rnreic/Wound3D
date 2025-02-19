@@ -235,15 +235,15 @@ def copy_selected_images(selected_indices, src_folder, dest_folder, image_option
 
 def main():
 
-    input_path = r"C:\Daten_Speicher\3D-Wound\Ferse\V2\Ferse_2.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
-    segments = .13  # or segments = 0.1
+    input_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
+    segments = .1  # or segments = 0.1
     image_options = {
-        'reduce_size': 0.75,
+        'reduce_size': 0.5,
         'square_crop': True,
         # 'crop' : .8,
     }
 
-    base_dir = os.path.dirname(input_path)
+    base_dir = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
 
     if os.path.isdir(input_path):
         # If the input is a directory
