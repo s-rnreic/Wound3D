@@ -178,7 +178,7 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask_PINHOLE"
     else:
         root = tk.Tk()
         root.withdraw()  # Hide the root window

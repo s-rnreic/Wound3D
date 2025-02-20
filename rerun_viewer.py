@@ -165,7 +165,7 @@ def main():
         args.resize = tuple(int(x) for x in args.resize.split("x"))
 
     rr.script_setup(args, "COLMAP_PIPELINE_VISUALIZATION")
-    dataset_path=Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
+    dataset_path=Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask_PINHOLE")
     print(f"Using dataset at {dataset_path}")
     read_and_log_sparse_reconstruction(dataset_path, filter_output=not args.unfiltered, resize=args.resize)
     rr.script_teardown(args)

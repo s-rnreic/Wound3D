@@ -45,6 +45,14 @@ def insert_lines_at_beginning_of_ini_file(file_path: str, lines: list):
     
     return file_path
 
+def append_to_total_project_ini(temp_ini_path, total_ini_path):
+    with open(temp_ini_path, 'r') as temp_file:
+        temp_data = temp_file.read()
+    with open(total_ini_path, 'a') as total_file:
+        total_file.write(temp_data + '\n')
+        total_file.write('---NextPart\n')
+
+
 def insert_keywords_to_project_ini(ini_path: str, keyword: str, parameter: str, value: str):
     config = configparser.ConfigParser()
     config.read(ini_path)
