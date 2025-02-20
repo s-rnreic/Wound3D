@@ -7,7 +7,7 @@ import zipfile
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import Final
-
+import rerun.blueprint as rrb
 import cv2
 import numpy as np
 import numpy.typing as npt
@@ -52,8 +52,8 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
 
     if filter_output:
         # Filter out noisy points
+        
         points3D = {id: point for id, point in points3D.items() if point.rgb.any() and len(point.image_ids) > 4}
-
     #rr.log("description", rr.TextDocument(DESCRIPTION, media_type=rr.MediaType.MARKDOWN), static=True)
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
     rr.log("plot/avg_reproj_err", rr.SeriesLine(color=[240, 45, 58]), static=True)
@@ -94,7 +94,8 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
         point_colors = [point.rgb for point in visible_xyzs]
         point_errors = [point.error for point in visible_xyzs]
 
-        rr.log("plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
+        # if point_errors:
+        #     rr.log("plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
 
         rr.log("points", rr.Points3D(points, colors=point_colors), rr.AnyValues(error=point_errors))
 
@@ -163,13 +164,25 @@ def main():
     print(args)
     if args.resize:
         args.resize = tuple(int(x) for x in args.resize.split("x"))
+    rerun_blueprint=rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.BarChartView(name="average_reprojection_error", origin="plot/avg_reproj_err"),
+            rrb.Vertical(
+                rrb.Spatial2DView(name="images", origin="camera/image"),
+                rrb.Spatial3DView(name="points", origin="points"),
+            ),
+        ),
+    )
+    
+    rr.init("COLMAP_PIPELINE_VIS", spawn=True)
+    rr.send_blueprint(rerun_blueprint, make_active=True)
+    
 
-    rr.script_setup(args, "COLMAP_PIPELINE_VISUALIZATION")
-    dataset_path=Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
+    dataset_path=Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask_PINHOLE")
     print(f"Using dataset at {dataset_path}")
-    read_and_log_sparse_reconstruction(dataset_path, filter_output=not args.unfiltered, resize=args.resize)
+    read_and_log_sparse_reconstruction(dataset_path, filter_output=False, resize=args.resize) #not args.unfiltered
     rr.script_teardown(args)
+    
     
 if __name__ == "__main__":
     main()
-    
