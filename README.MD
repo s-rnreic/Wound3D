@@ -1,38 +1,66 @@
-## Erste Version der COLMAP PIPELINE
+## Conservative Glomap Workflow for Wound Segmentation and 3D Reconstruction
 
-### Nutzeroberfläche und Abfolge der Abfragen an Nutzer
-    1. Eingabe von video-Path + Frage nach Output_dir 
-        - wenn User kein output_dir --> dann standard output_dir (Erstellen eines COLMAP-Ordnes, falls vorhanden unterornder erstellen (Zeitstemptel))
+### Pipeline Components
 
+1. **Video Analysis/Processing**
+    - `video_edit.py`: Decomposes video into images and selects images based on sharpness and equidistance.
+    - `mask_edit.py`: Automatically creates masks using thresholding.
+        - Optional: Use Retinex or other color homogenization techniques.
 
-PIPELINE-Anteile
-1. Video-Analyse/Bearbeitung
-    - video_edit.py --> Zerlegen von Video in Bilder + Bilder auf Sharpness und Äquidistanz auswählen
-    - mask_edit.py --> automatische Erstellung von Masken (Tresholding)
-        --> Optional: Retinex oder weitere Farbhomogenisierungen verwenden
+2. **COLMAP/SFM Pipeline**
+    - Parameters can be specified through a project file.
+        - Automatic creation of a project file where parameters and settings are specified.
+        - The change of parameters is presented to the user in a text editor
+            - List of parameters:
+                - segments, resize_factor (main.py)
+                - min_sharpness_percentile (prepare_vid_for_colmap_v5.py)
+                - List of Parameters given in project.ini files
+        - Alternatively, execute the COLMAP pipeline with predefined standard values 
+    - Save results in the standard COLMAP folder structure as sparse.
+        - Output workspace structure:
 
-    FRAGEN: Wo werden bilder gespeichert? soll gesamte Pipeline in einem Ordner landen? 
-2. COLMAP/SFM-PIPELINE
-    - Parameter sollen in GUI oder durch eine Projectfile bestimmt werden 
-        - Automatische Erstellung eines Project --> in der Parameter und Einstellungen angegeben sind
-        - Ansonsten Durchführung der COLMAP Pipeline mit "vordefinierten" Standardwerten --> optimierung noch ausstehend, sollte aber erfolgen
-        -
-    - Speichern als sparse und dense in der normalen COLMAP Folderstruktur
+        --  Workspace
+            |   database.db
+            |   glomap_config.ini
+            |   pipeline_times.log
+            |   project.ini
+            |   TempProject.ini
+            |   TotalProject.ini
+            +---raw_images    
+            +---sharp_images
+            \---sparse
+                \---0
+                        cameras.bin
+                        images.bin
+                        points3D.bin
+                        
 
-3. Nachbearbeitung
-    - Möglicherweise Filtern von Hintergründen, Ausstehenden Kanten etc.
+    - For each execution the main.py: saving relative Parameters in sqlite3 Database "Trial.db"
 
+3. **Post-Processing**
+    - Possibly filter backgrounds, outstanding edges, etc.
 
+### Features of the Glomap Pipeline in `main.py`
 
+- **User Input**: Allows user to input video path and workspace path.
+- **Workspace Creation**: Creates a structured workspace directory with subfolders for raw images, sharp images, masks, sparse, and dense data.
+- **Video Pipeline**: 
+    - Extracts images from video.
+    - Selects sharp and equidistant images.
+    - Optionally processes images to create masks.
+- **COLMAP Pipeline**:
+    - Executes COLMAP commands for feature extraction, feature matching, and mapping using temporary project files.
+    - Appends the data from temporary project files to a total project file (`total_project.ini`).
+- **Analysis**: Analyzes the output of the COLMAP pipeline.
+- **Rerun Streaming**: Reruns the COLMAP pipeline for visualization.
+- **Timing Analysis**: Logs the elapsed time for each step of the pipeline and calculates the total elapsed time.
+- **Database Integration**: Loads existing experiments into a database with details such as experiment description, project file, cameras, images, 3D points, observations, mean reprojection error, mean track length, mean observations per image, resize factor, fraction of images, and elapsed time.
 
-Möglichkeiten der Visualisierung
-- Dash-app 
-    -COLMAP PIPELINE im Hintergrund
-    - Visualisierung wie bei beispiel-app Möglichkeiten
-    - Vielleicht wäre RERUN auch eine Option
+### Visualization
 
-- TKtinker/Qt app
-    - leichteste und rudimentärste GUI ohne viel Vorwissen und Komplikationen
+The visualization of the trial is achieved via the Rerun viewer.
 
-- Dash + RERUN-Viewer 
-    --> aktueller Stand: SfM-Viewer in Rerun mit reading der BIN-Files und des master
+<video width="640" height="360" controls>
+  <source src="video.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
