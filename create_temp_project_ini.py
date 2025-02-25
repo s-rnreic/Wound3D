@@ -133,6 +133,14 @@ def create_temp_project_ini(ini_path:str, *keywords):
     print(f"TempProject.ini created at {temp_ini_path}")
     return temp_ini_path
 
+def append_to_total_project_ini(temp_ini_path, total_ini_path):
+    with open(temp_ini_path, 'r') as temp_file:
+        temp_data = temp_file.read()
+    with open(total_ini_path, 'a') as total_file:
+        total_file.write(temp_data + '\n')
+        total_file.write('---NextPart\n')
+
+
 def execute_tepm_project_ini(ini_path, *keywords):
     command = f'call colmap {keywords[0]} --project_path "{ini_path}"'
     os.system(command)

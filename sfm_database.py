@@ -30,7 +30,10 @@ def setup_database(database_path: str) -> str:
             mean_track_length REAL,
             mean_observations_per_image REAL,
             elapsed_time REAL,
-            Trial_date TEXT DEFAULT (DATETIME('now', 'localtime'))
+            Trial_date TEXT DEFAULT (DATETIME('now', 'localtime')),
+            MOS INTEGER CHECK (MOS >= 1 AND MOS <= 10),
+            branch TEXT,
+            commit_hash TEXT
         )
     ''')
     
@@ -93,19 +96,50 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
         elif key == 'elapsed_time':
             elapsed_time = value
 
+    branch = get_git_branch()
+    commit_hash = get_git_commit()
+    mos = None  # Assuming MOS is not provided in kwargs
+
     # Insert data into the database
     cursor.execute('''
-        INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, mean_repo_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (experiment_description, project_ini, cameras, images, points3D, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time))
+        INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, mean_repo_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, MOS, branch, commit_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (experiment_description, project_ini, cameras, images, points3D, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash))
     
     # Commit the changes and close the connection
     conn.commit()
     conn.close()
 
+# Get current Git branch
+def get_git_branch():
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip().decode("utf-8")
+    except subprocess.CalledProcessError:
+        return None  # Not in a Git repository
+
+# Get latest commit hash
+def get_git_commit():
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).strip().decode("utf-8")
+    except subprocess.CalledProcessError:
+        return None  # Not in a Git repository
+
+def insert_MOS(database_path: str, score: int, id: int) -> None:
+    conn = sqlite3.connect(database_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE Trial
+        SET MOS = ?
+        WHERE id = ?
+    ''', (score,id))
+    
+    conn.commit()
+    conn.close()
 
 if __name__ == '__main__':
-    folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\05_reso_05_sharp'
-    database_path=r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark\Trial.db'
-    setup_database(r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark')
-    load_existing_experiments(database_path, folder_path, experiment_description='Trails with 50% resolution and 50% of the number of images', resize_factor=0.5, fraction_of_images=0.5, elapsed_time=75)
+    folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask'
+    database_path=r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\Trial.db'
+    #setup_database(r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark')
+    #load_existing_experiments(database_path, folder_path, experiment_description='Trails with 50% resolution and 50% of the number of images', resize_factor=0.5, fraction_of_images=0.5, elapsed_time=75)
+    insert_MOS(database_path, 6, 1)
