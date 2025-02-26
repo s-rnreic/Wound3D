@@ -7,7 +7,7 @@ import zipfile
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import Final
-
+import rerun.blueprint as rrb
 import cv2
 import numpy as np
 import numpy.typing as npt
@@ -43,6 +43,21 @@ def scale_camera(camera: Camera, resize: tuple[int, int]) -> tuple[Camera, npt.N
 
     return (Camera(camera.id, camera.model, new_width, new_height, new_params), scale_factor)
 
+def map_error_to_color(errors: list[float]) -> list[list[int]]:
+    """Map reprojection errors to colors based on thresholds."""
+    mean_error = np.mean(errors)
+    colors = []
+    for error in errors:
+        if error > 3:
+            colors.append([255, 0, 0])  # Red
+        elif error < 0.5 * mean_error:
+            colors.append([0, 255, 0])  # Green
+        else:
+            normalized_error = (error - 0.5 * mean_error) / (3 - 0.5 * mean_error)
+            red = int(255 * normalized_error)
+            green = int(255 * (1 - normalized_error))
+            colors.append([red, green, 0])
+    return colors
 
 def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, resize: tuple[int, int] | None) -> None:
     #print("Reading sparse COLMAP reconstruction")
@@ -52,7 +67,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
 
     if filter_output:
         # Filter out noisy points
-        points3D = {id: point for id, point in points3D.items() if point.rgb.any()}
+        points3D = {id: point for id, point in points3D.items()}
 
     
     #rr.log("description", rr.TextDocument(DESCRIPTION, media_type=rr.MediaType.MARKDOWN), static=True)
@@ -60,9 +75,27 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
     
     all_points = [point.xyz for point in points3D.values()]
     all_point_colors = [point.rgb for point in points3D.values()]
-    rr.log("all_points", rr.Points3D(all_points, colors=all_point_colors), static=True)
-    rr.log("plot/avg_reproj_err", rr.SeriesLine(color=[240, 45, 58]), static=True)
+    all_point_errors = [point.error for point in points3D.values()]
+    rr.log("all_points", rr.Points3D(all_points, colors=all_point_colors), rr.AnyValues(error=all_point_errors), static=True)
 
+    # Log points with colors based on reprojection error
+    error_colors = map_error_to_color(all_point_errors)
+    rr.log("color_map_mean_repo_error", rr.Points3D(all_points, colors=error_colors), static=True)
+
+    # Log points with colors based on track length
+    track_lengths = [len(point.image_ids) for point in points3D.values()]
+    mean_track_length = np.mean(track_lengths)
+    track_colors = [
+        [int(255 * (1 - (length / mean_track_length))), 
+         int(255 * (length / mean_track_length)), 
+         0]
+        for length in track_lengths
+    ]
+    rr.log("track_length", rr.Points3D(all_points, colors=track_colors), static=True)
+    rr.log("track_length", rr.Scalar(track_lengths), static=True)
+    #colormap of reprojection error
+    
+    
     # Iterate through images (video frames) logging data related to each frame.
     image_list = sorted(images.values(), key=lambda im: im.name)
     for image in image_list:  # type: ignore[no-any-return]
@@ -100,7 +133,8 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
         point_colors = [point.rgb for point in visible_xyzs]
         point_errors = [point.error for point in visible_xyzs]
 
-        rr.log("plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
+        if point_errors:
+            rr.log("plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
 
         rr.log("points", rr.Points3D(points, colors=point_colors), rr.AnyValues(error=point_errors))
 
@@ -173,9 +207,10 @@ def main():
     rr.script_setup(args, "COLMAP_PIPELINE_VISUZATN")
     dataset_path=Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
     print(f"Using dataset at {dataset_path}")
-    read_and_log_sparse_reconstruction(dataset_path, filter_output=not args.unfiltered, resize=args.resize)
+    read_and_log_sparse_reconstruction(dataset_path, filter_output=False, resize=args.resize) #not args.unfiltered
     rr.script_teardown(args)
+    
     
 if __name__ == "__main__":
     #main()
-    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark_new\06_circ_mask")
+    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark_new\06_circ_mask_more_features")
