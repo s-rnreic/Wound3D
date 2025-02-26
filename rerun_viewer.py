@@ -64,14 +64,15 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
     rr.log("plot/avg_reproj_err", rr.SeriesLine(color=[240, 45, 58]), static=True)
 
     # Iterate through images (video frames) logging data related to each frame.
-    for image in sorted(images.values(), key=lambda im: im.name):  # type: ignore[no-any-return]
+    image_list = sorted(images.values(), key=lambda im: im.name)
+    for image in image_list:  # type: ignore[no-any-return]
         image_file = dataset_path / "sharp_images" / image.name
         mask_file = dataset_path / "masks" / (image.name + '.jpg')
         if not os.path.exists(image_file):
             continue
 
         # COLMAP sets image ids that don't match the original video frame
-        idx_match = re.search(r"\d+", image.name)
+        idx_match = re.search(r"(\d+)(?=\.\w+$)", image.name)
         assert idx_match is not None
         frame_idx = int(idx_match.group(0))
 
@@ -93,7 +94,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
         if resize:
             visible_xys *= scale_factor
 
-        rr.set_time_sequence("frame", frame_idx)
+        #rr.set_time_sequence("frames", frame_idx)
 
         points = [point.xyz for point in visible_xyzs]
         point_colors = [point.rgb for point in visible_xyzs]
