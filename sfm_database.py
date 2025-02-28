@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import subprocess
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 # Creates and manages the database of the colmap/glomap Pipeline
 # TODO: add reference tables from the database.db (cameras,image,features,pose_prior etc.) --> are they nessessary?
@@ -32,6 +34,10 @@ def setup_database(database_path: str) -> str:
             elapsed_time REAL,
             Trial_date TEXT DEFAULT (DATETIME('now', 'localtime')),
             MOS INTEGER CHECK (MOS >= 1 AND MOS <= 10),
+            Wound_MOS INTEGER CHECK (Wound_MOS >= 1 AND Wound_MOS <= 10),
+            Density_MOS INTEGER CHECK (Density_MOS >= 1 AND Density_MOS <= 10),
+            Homogeneity_MOS INTEGER CHECK (Homogeneity_MOS >= 1 AND Homogeneity_MOS <= 10),
+            COLOR_MOS INTEGER CHECK (COLOR_MOS >= 1 AND COLOR_MOS <= 10),
             branch TEXT,
             commit_hash TEXT
         )
@@ -123,23 +129,77 @@ def get_git_commit():
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).strip().decode("utf-8")
     except subprocess.CalledProcessError:
         return None  # Not in a Git repository
-
-def insert_MOS(database_path: str, score: int, id: int) -> None:
+    
+def insert_MOS(database_path: str, mos_values: dict, trial_id: int) -> None:
     conn = sqlite3.connect(database_path)
     cursor = conn.cursor()
     
-    cursor.execute('''
-        UPDATE Trial
-        SET MOS = ?
-        WHERE id = ?
-    ''', (score,id))
+    for mos_type, score in mos_values.items():
+        cursor.execute(f'''
+            UPDATE Trial
+            SET {mos_type} = ?
+            WHERE id = ?
+        ''', (score, trial_id))
     
     conn.commit()
     conn.close()
+
+def open_mos_window(database_path: str):
+    def submit():
+        try:
+            trial_id = int(trial_id_entry.get())
+            mos_values = {
+                'MOS': int(mos_entry.get()),
+                'Wound_MOS': int(wound_mos_entry.get()),
+                'Density_MOS': int(density_mos_entry.get()),
+                'Homogeneity_MOS': int(homogeneity_mos_entry.get()),
+                'COLOR_MOS': int(color_mos_entry.get())
+            }
+            for value in mos_values.values():
+                if value < 1 or value > 10:
+                    raise ValueError("MOS values must be between 1 and 10")
+            insert_MOS(database_path, mos_values, trial_id)
+            messagebox.showinfo("Success", "MOS values updated successfully")
+        except ValueError as e:
+            messagebox.showerror("Error", str(e))
+
+    window = tk.Tk()
+    window.title("Insert MOS Values")
+
+    tk.Label(window, text="Trial ID:").grid(row=0, column=0)
+    trial_id_entry = tk.Entry(window)
+    trial_id_entry.grid(row=0, column=1)
+
+    tk.Label(window, text="MOS:").grid(row=1, column=0)
+    mos_entry = tk.Entry(window)
+    mos_entry.grid(row=1, column=1)
+
+    tk.Label(window, text="Wound MOS:").grid(row=2, column=0)
+    wound_mos_entry = tk.Entry(window)
+    wound_mos_entry.grid(row=2, column=1)
+
+    tk.Label(window, text="Density MOS:").grid(row=3, column=0)
+    density_mos_entry = tk.Entry(window)
+    density_mos_entry.grid(row=3, column=1)
+
+    tk.Label(window, text="Homogeneity MOS:").grid(row=4, column=0)
+    homogeneity_mos_entry = tk.Entry(window)
+    homogeneity_mos_entry.grid(row=4, column=1)
+
+    tk.Label(window, text="COLOR MOS:").grid(row=5, column=0)
+    color_mos_entry = tk.Entry(window)
+    color_mos_entry.grid(row=5, column=1)
+
+    submit_button = tk.Button(window, text="Submit", command=submit)
+    submit_button.grid(row=6, column=0, columnspan=2)
+
+    window.mainloop()
+
 
 if __name__ == '__main__':
     folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask'
     database_path=r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\Trial.db'
     #setup_database(r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark')
     #load_existing_experiments(database_path, folder_path, experiment_description='Trails with 50% resolution and 50% of the number of images', resize_factor=0.5, fraction_of_images=0.5, elapsed_time=75)
-    insert_MOS(database_path, 6, 1)
+    #insert_MOS(database_path, 6, 1)
+    open_mos_window(database_path)
