@@ -76,14 +76,19 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
     all_points = [point.xyz for point in points3D.values()]
     all_point_colors = [point.rgb for point in points3D.values()]
     all_point_errors = [point.error for point in points3D.values()]
+    error_histogram, bin_edges = np.histogram(all_point_errors, bins='auto')
     rr.log("all_points", rr.Points3D(all_points, colors=all_point_colors), rr.AnyValues(error=all_point_errors), static=True)
-
+    rr.log("Bar/avg_reproj_err", rr.BarChart(error_histogram), static=True)
+    
+    
     # Log points with colors based on reprojection error
     error_colors = map_error_to_color(all_point_errors)
     rr.log("color_map_mean_repo_error", rr.Points3D(all_points, colors=error_colors), static=True)
+    rr.log("color_map_mean_repo_error", rr.Scalar(all_point_errors), static=True)
 
     # Log points with colors based on track length
     track_lengths = [len(point.image_ids) for point in points3D.values()]
+    track_lengths_histo, bin_edges= np.histogram(track_lengths, bins='auto')
     mean_track_length = np.mean(track_lengths)
     track_colors = [
         [int(255 * (1 - (length / mean_track_length))), 
@@ -93,6 +98,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
     ]
     rr.log("track_length", rr.Points3D(all_points, colors=track_colors), static=True)
     rr.log("track_length", rr.Scalar(track_lengths), static=True)
+    rr.log("Bar/track_length", rr.BarChart(track_lengths_histo), static=True)
     #colormap of reprojection error
     
     
@@ -100,7 +106,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
     image_list = sorted(images.values(), key=lambda im: im.name)
     for image in image_list:  # type: ignore[no-any-return]
         image_file = dataset_path / "sharp_images" / image.name
-        mask_file = dataset_path / "masks" / (image.name + '.jpg')
+        mask_file = dataset_path / "masks" / (image.name + '.png')
         if not os.path.exists(image_file):
             continue
 
@@ -134,7 +140,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
         point_errors = [point.error for point in visible_xyzs]
 
         if point_errors:
-            rr.log("plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
+            rr.log("/plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
 
         rr.log("points", rr.Points3D(points, colors=point_colors), rr.AnyValues(error=point_errors))
 
@@ -160,10 +166,14 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
             bgr = cv2.resize(bgr, resize)
             rr.log("camera/image", rr.Image(bgr, color_model="BGR").compress(jpeg_quality=75))
         else:
-            rr.log("camera/image", rr.EncodedImage(path=dataset_path / "sharp_images" / image.name))
+            image= cv2.imread(str(image_file), cv2.IMREAD_COLOR_RGB)
+            if os.path.exists(mask_file):
+                masked_image = cv2.bitwise_and(image, image, mask=cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE))
+                combined = cv2.addWeighted(image, 0.7, cv2.cvtColor(cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE), cv2.COLOR_GRAY2BGR), 0.3, 0)
 
+                rr.log("camera/image", rr.Image(combined))
+            
         rr.log("camera/image/keypoints", rr.Points2D(visible_xys, colors=[34, 138, 167]))
-        
 
 def Rerun_Colmap_Pipeline(workspace_path:str)->None:
     parser = ArgumentParser(description="Visualize the output of COLMAP's sparse reconstruction on a video.")
@@ -181,11 +191,25 @@ def Rerun_Colmap_Pipeline(workspace_path:str)->None:
     if args.resize:
         args.resize = tuple(int(x) for x in args.resize.split("x"))
 
-    rr.script_setup(args, "COLMAP_PIPELINE_VISUIZATION",recording_id=workspace_path)
-    dataset_path=Path(workspace_path)
+    rr.init("COLMAP_Visualization", recording_id="COLMAP_PIPELINE", spawn=True)
+
+    # Define a blueprint (layout) to organize how data appears
+    rr.send_blueprint(rrb.Blueprint(
+        rrb.Grid(
+            rrb.Spatial2DView(origin="/camera/image"),
+            rrb.Spatial3DView(origin="/", contents=["+ $origin/**", "- /all_points", "- /color_map_mean_repo_error/**", "- /track_length/**"]),
+            rrb.Tabs(
+                rrb.Spatial3DView(origin="all_points"),
+                rrb.Spatial3DView(origin="color_map_mean_repo_error"),
+                rrb.Spatial3DView(origin="track_length")
+            ),
+            rrb.Tabs(rrb.TimeSeriesView(origin="/plot/avg_reproj_err"),rrb.BarChartView(origin="/Bar")),
+        )
+    ))
+
+    dataset_path = Path(workspace_path)
     print(f"Using dataset at {dataset_path}")
     read_and_log_sparse_reconstruction(dataset_path, filter_output=not args.unfiltered, resize=args.resize)
-    rr.script_teardown(args)
 
 def main():
     parser = ArgumentParser(description="Visualize the output of COLMAP's sparse reconstruction on a video.")
@@ -204,13 +228,12 @@ def main():
     if args.resize:
         args.resize = tuple(int(x) for x in args.resize.split("x"))
 
-    rr.script_setup(args, "COLMAP_PIPELINE_VISUZATN")
-    dataset_path=Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
+    rr.script_setup(args, "COLMAP_PIPELINE_VISUALIZATION")
+    dataset_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
     print(f"Using dataset at {dataset_path}")
-    read_and_log_sparse_reconstruction(dataset_path, filter_output=False, resize=args.resize) #not args.unfiltered
+    read_and_log_sparse_reconstruction(dataset_path, filter_output=False, resize=args.resize)
     rr.script_teardown(args)
-    
-    
+
 if __name__ == "__main__":
     #main()
-    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark_new\06_circ_mask_more_features")
+    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark_new\08_circ_mask")
