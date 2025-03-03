@@ -106,7 +106,8 @@ def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segment
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
-    #masking.process_folder(sharp_image_path, image_mask_path)
+    if Masking:
+        masking.process_folder(sharp_image_path, image_mask_path,radius=0.8)
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
@@ -138,7 +139,7 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     sparse_path = os.path.join(workspace_path, 'sparse')
     os.makedirs(sparse_path, exist_ok=True)
     ctgi.create_glomap_ini(workspace_path + '\\glomap_config.ini')
-    open_ini_in_editor(workspace_path + '\\glomap_config.ini')
+    #open_ini_in_editor(workspace_path + '\\glomap_config.ini')
     ctgi.execute_glomap(workspace_path + '\\glomap_config.ini', database_path, sparse_path, sharp_image_path)
     ctpi.append_to_total_project_ini(workspace_path + '\\glomap_config.ini', total_ini_path)
     elapsed_time = time.time() - start_time
@@ -170,38 +171,17 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str =
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
     subprocess.call([editor, ini_path])
-        
+       
 
-def main()->None:
-    TEST = True
-    global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
-    
-    if TEST:
-        video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask"
-    else:
-        root = tk.Tk()
-        root.withdraw()  # Hide the root window
-
-        video_path = filedialog.askopenfilename(title="Select Video File", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
-        workspace_path = filedialog.askdirectory(title="Select Workspace Directory")
+def run_colmap_process(video_path, segments, image_options):
+    global ini_path, database_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
     create_workspace(workspace_path)
-    
-    #segments, image_options = get_user_input()
-    segments = 0.05
-    resize_factor = 1.0
-    image_options = {
-        'reduce_size': resize_factor,
-        #'square_crop': True,
-        #'crop': 0.8,
-    }
-    
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
-    open_ini_in_editor(ini_path)
+    #open_ini_in_editor(ini_path)
     
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=False)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -211,12 +191,32 @@ def main()->None:
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
     print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
+    return total_elapsed_time        
+
+def main()->None:
+    TEST = True
+    global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
-    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
+    if TEST:
+        video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\1_reso_002_sharp_no_mask"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments'
+        experiment_description = ' 100% resolution, 2% of sharp images, no mask'
     
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description='Trails with 100% resolution and 5% of the number of images', resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
+    #segments, image_options = get_user_input()
     
-    return 0 
+    resize_factor = 1.0
+    segments = 0.02
+    image_options = {
+        'reduce_size': resize_factor,
+        #'square_crop': True,
+        #'crop': 0.8,
+    }
+    total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
+
+    
 
 if __name__ == '__main__':
 

@@ -117,7 +117,7 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
     """Select indices of sharpest images, ensuring they are nearly equidistant and above a sharpness threshold."""
     
     # Convert percentage to a decimal if necessary
-    if segments < 1:
+    if segments <= 1.0:
         segments = int(len(sharpness_df) * segments)
     
     if len(sharpness_df) < segments:

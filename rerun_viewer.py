@@ -59,7 +59,7 @@ def map_error_to_color(errors: list[float]) -> list[list[int]]:
             colors.append([red, green, 0])
     return colors
 
-def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, resize: tuple[int, int] | None) -> None:
+def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=False, resize: tuple[int, int]=None) -> None:
     #print("Reading sparse COLMAP reconstruction")
     sparse_path = dataset_path / "sparse//0"
     cameras, images, points3D = read_model(sparse_path, ext=".bin")
@@ -69,14 +69,19 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
         # Filter out noisy points
         points3D = {id: point for id, point in points3D.items()}
 
-    
-    #rr.log("description", rr.TextDocument(DESCRIPTION, media_type=rr.MediaType.MARKDOWN), static=True)
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
     
     all_points = [point.xyz for point in points3D.values()]
+    # Calculate the center of the point cloud
+    center_point = np.mean(all_points, axis=0)
+    # Calculate the position of each point relative to the center
+    all_points = [point - center_point for point in all_points]
     all_point_colors = [point.rgb for point in points3D.values()]
     all_point_errors = [point.error for point in points3D.values()]
+
     error_histogram, bin_edges = np.histogram(all_point_errors, bins='auto')
+
+    
     rr.log("all_points", rr.Points3D(all_points, colors=all_point_colors), rr.AnyValues(error=all_point_errors), static=True)
     rr.log("Bar/avg_reproj_err", rr.BarChart(error_histogram), static=True)
     
@@ -172,26 +177,27 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool, 
                 combined = cv2.addWeighted(image, 0.7, cv2.cvtColor(cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE), cv2.COLOR_GRAY2BGR), 0.3, 0)
 
                 rr.log("camera/image", rr.Image(combined))
+            rr.log("camera/image", rr.Image(image))
             
         rr.log("camera/image/keypoints", rr.Points2D(visible_xys, colors=[34, 138, 167]))
 
 def Rerun_Colmap_Pipeline(workspace_path:str)->None:
-    parser = ArgumentParser(description="Visualize the output of COLMAP's sparse reconstruction on a video.")
-    parser.add_argument("--unfiltered", action="store_true", help="If set, we don't filter away any noisy data.")
-    parser.add_argument(
-        "--dataset",
-        action="store",
-        default="colmap_rusty_car",
-        choices=["colmap_rusty_car", "colmap_fiat"],
-        help="Which dataset to download",
-    )
-    parser.add_argument("--resize", action="store", help="Target resolution to resize images")
-    rr.script_add_args(parser)
-    args = parser.parse_args()
-    if args.resize:
-        args.resize = tuple(int(x) for x in args.resize.split("x"))
+    # parser = ArgumentParser(description="Visualize the output of COLMAP's sparse reconstruction on a video.")
+    # parser.add_argument("--unfiltered", action="store_true", help="If set, we don't filter away any noisy data.")
+    # parser.add_argument(
+    #     "--dataset",
+    #     action="store",
+    #     default="colmap_rusty_car",
+    #     choices=["colmap_rusty_car", "colmap_fiat"],
+    #     help="Which dataset to download",
+    # )
+    # parser.add_argument("--resize", action="store", help="Target resolution to resize images")
+    # rr.script_add_args(parser)
+    # args = parser.parse_args()
+    # if args.resize:
+    #     args.resize = tuple(int(x) for x in args.resize.split("x"))
 
-    rr.init("COLMAP_Visualization", recording_id="COLMAP_PIPELINE", spawn=True)
+    rr.init("COLMAP_Visualization", recording_id= workspace_path, spawn=True)
 
     # Define a blueprint (layout) to organize how data appears
     rr.send_blueprint(rrb.Blueprint(
@@ -209,31 +215,12 @@ def Rerun_Colmap_Pipeline(workspace_path:str)->None:
 
     dataset_path = Path(workspace_path)
     print(f"Using dataset at {dataset_path}")
-    read_and_log_sparse_reconstruction(dataset_path, filter_output=not args.unfiltered, resize=args.resize)
-
-def main():
-    parser = ArgumentParser(description="Visualize the output of COLMAP's sparse reconstruction on a video.")
-    parser.add_argument("--unfiltered", action="store_true", help="If set, we don't filter away any noisy data.")
-    parser.add_argument(
-        "--dataset",
-        action="store",
-        default="colmap_rusty_car",
-        choices=["colmap_rusty_car", "colmap_fiat"],
-        help="Which dataset to download",
-    )
-    parser.add_argument("--resize", action="store", help="Target resolution to resize images")
-    rr.script_add_args(parser)
-    args = parser.parse_args()
-    print(args)
-    if args.resize:
-        args.resize = tuple(int(x) for x in args.resize.split("x"))
-
-    rr.script_setup(args, "COLMAP_PIPELINE_VISUALIZATION")
-    dataset_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test")
-    print(f"Using dataset at {dataset_path}")
-    read_and_log_sparse_reconstruction(dataset_path, filter_output=False, resize=args.resize)
-    rr.script_teardown(args)
+    read_and_log_sparse_reconstruction(dataset_path)
 
 if __name__ == "__main__":
     #main()
-    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark_new\08_circ_mask")
+    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\1_reso_005_sharp_no_mask")
+    # base_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments"
+    # for folder in os.listdir(base_path):
+    #     full_path = os.path.join(base_path, folder)
+    #     Rerun_Colmap_Pipeline(full_path)
