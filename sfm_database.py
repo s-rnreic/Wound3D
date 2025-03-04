@@ -21,6 +21,7 @@ def setup_database(database_path: str) -> str:
         CREATE TABLE IF NOT EXISTS Trial (
             id INTEGER PRIMARY KEY,
             experiment_description TEXT,
+            folder_path TEXT,
             project_ini TEXT,
             cameras BLOB,
             image BLOB,
@@ -108,9 +109,9 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
 
     # Insert data into the database
     cursor.execute('''
-        INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, mean_repo_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, MOS, branch, commit_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (experiment_description, project_ini, cameras, images, points3D, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash))
+        INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, mean_repo_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, MOS, branch, commit_hash, folder_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (experiment_description, project_ini, cameras, images, points3D, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash, folder_path))
     
     # Commit the changes and close the connection
     conn.commit()
@@ -153,7 +154,8 @@ def open_mos_window(database_path: str):
                 'Wound_MOS': int(wound_mos_entry.get()),
                 'Density_MOS': int(density_mos_entry.get()),
                 'Homogeneity_MOS': int(homogeneity_mos_entry.get()),
-                'COLOR_MOS': int(color_mos_entry.get())
+                'COLOR_MOS': int(color_mos_entry.get()),
+                'Noise_MOS': int(noise_mos_entry.get())
             }
             for value in mos_values.values():
                 if value < 1 or value > 10:
@@ -189,6 +191,10 @@ def open_mos_window(database_path: str):
     tk.Label(window, text="COLOR MOS:").grid(row=5, column=0)
     color_mos_entry = tk.Entry(window)
     color_mos_entry.grid(row=5, column=1)
+    
+    tk.Label(window, text="Noise MOS:").grid(row=6, column=0)
+    noise_mos_entry = tk.Entry(window)
+    noise_mos_entry.grid(row=6, column=1)
 
     submit_button = tk.Button(window, text="Submit", command=submit)
     submit_button.grid(row=6, column=0, columnspan=2)
@@ -198,7 +204,7 @@ def open_mos_window(database_path: str):
 
 if __name__ == '__main__':
     folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask'
-    database_path=r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\Trial.db'
+    database_path=r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Trial.db"
     #setup_database(r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark')
     #load_existing_experiments(database_path, folder_path, experiment_description='Trails with 50% resolution and 50% of the number of images', resize_factor=0.5, fraction_of_images=0.5, elapsed_time=75)
     #insert_MOS(database_path, 6, 1)
