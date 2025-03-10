@@ -23,9 +23,9 @@ def setup_database(database_path: str) -> str:
             experiment_description TEXT,
             folder_path TEXT,
             project_ini TEXT,
-            cameras BLOB,
-            image BLOB,
-            Points3D BLOB,
+            cameras TEXT,
+            image TEXT,
+            Points3D TEXT,
             resize_factor REAL,
             fraction_of_images REAL,
             Observations INTEGER,
@@ -39,6 +39,7 @@ def setup_database(database_path: str) -> str:
             Density_MOS INTEGER CHECK (Density_MOS >= 1 AND Density_MOS <= 10),
             Homogeneity_MOS INTEGER CHECK (Homogeneity_MOS >= 1 AND Homogeneity_MOS <= 10),
             COLOR_MOS INTEGER CHECK (COLOR_MOS >= 1 AND COLOR_MOS <= 10),
+            Noise_MOS INTEGER CHECK (Noise_MOS >= 1 AND Noise_MOS <= 10),
             branch TEXT,
             commit_hash TEXT
         )
@@ -68,13 +69,6 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
     cameras_path = os.path.join(sparse_folder, 'cameras.bin')
     images_path = os.path.join(sparse_folder, 'images.bin')
     points3D_path = os.path.join(sparse_folder, 'points3D.bin')
-    
-    with open(cameras_path, 'rb') as file:
-        cameras = file.read()
-    with open(images_path, 'rb') as file:
-        images = file.read()
-    with open(points3D_path, 'rb') as file:
-        points3D = file.read()
     
     result = subprocess.run(f"colmap model_analyzer --path {sparse_folder}", shell=True, capture_output=True, text=True)
     #print(result.stderr)
@@ -111,7 +105,7 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
     cursor.execute('''
         INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, mean_repo_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, MOS, branch, commit_hash, folder_path)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (experiment_description, project_ini, cameras, images, points3D, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash, folder_path))
+    ''', (experiment_description, project_ini, cameras_path, images_path, points3D_path, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash, folder_path))
     
     # Commit the changes and close the connection
     conn.commit()
