@@ -10,7 +10,7 @@ from tkinter import filedialog, simpledialog  # Add simpledialog for user input
 import build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
-
+from read_write_model import write_model
 # user inserts a input_path and a workspace_path
 # workspace_path : path to a folder where all images (raw,sharp), the colmap data will be saved
 #
@@ -98,9 +98,10 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     # #3. COLMAP RERUN Streaming
 def COLMAP_RERUN(workspace_path:str, log_file:str) -> None:
     start_time = time.time()
-    rerun_viewer.Rerun_Colmap_Pipeline(workspace_path)
+    cameras, images, filtered_points3D=rerun_viewer.Rerun_Colmap_Pipeline(workspace_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_RERUN", elapsed_time)
+    return cameras, images, filtered_points3D
 
 def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str = None) -> None:
     start_time = time.time()
@@ -136,7 +137,9 @@ def run_colmap_process(video_path, segments, image_options):
     
     ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    COLMAP_RERUN(workspace_path, log_file)
+    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    
+    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
     print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
@@ -148,20 +151,21 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\07_reso_05_sharp_no_mask"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments'
-        experiment_description = ' 70% resolution, 50% of sharp images, no mask'
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test_Trial\1_reso_005_sharp_no_mask"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test_Trial'
+        experiment_description = ' 100% resolution, 5% of sharp images, no mask'
     
     #segments, image_options = get_user_input()
     
-    resize_factor = 0.7
-    segments = 0.5
+    resize_factor = 1.0
+    segments = 0.05
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
         #'crop': 0.8,
     }
     total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    
     
     sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
 

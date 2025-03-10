@@ -15,6 +15,7 @@ import requests
 import rerun as rr  # pip install rerun-sdk
 from tqdm import tqdm
 from read_write_model import Camera, read_model  # type: ignore[attr-defined]
+import matplotlib.pyplot as plt
 
 FILTER_MIN_VISIBLE: Final = 500
 DESCRIPTION = """
@@ -59,36 +60,31 @@ def map_error_to_color(errors: list[float]) -> list[list[int]]:
             colors.append([red, green, 0])
     return colors
 
-def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=False, resize: tuple[int, int]=None) -> None:
+
+def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=False, resize: tuple[int, int]=None):
     #print("Reading sparse COLMAP reconstruction")
     sparse_path = dataset_path / "sparse//0"
     cameras, images, points3D = read_model(sparse_path, ext=".bin")
-    #print("Building visualization by logging to Rerun")
-
-    if filter_output:
-        # Filter out noisy points
-        points3D = {id: point for id, point in points3D.items()}
 
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
     
-    all_points = [point.xyz for point in points3D.values()]
+    all_points_xyz = [point.xyz for point in points3D.values()]
     # Calculate the center of the point cloud
-    center_point = np.mean(all_points, axis=0)
+    center_point = np.mean(all_points_xyz, axis=0)
     # Calculate the position of each point relative to the center
-    all_points = [point - center_point for point in all_points]
+    all_points_xyz = [point - center_point for point in all_points_xyz]
     all_point_colors = [point.rgb for point in points3D.values()]
     all_point_errors = [point.error for point in points3D.values()]
 
     error_histogram, bin_edges = np.histogram(all_point_errors, bins='auto')
 
-    
-    rr.log("all_points", rr.Points3D(all_points, colors=all_point_colors), rr.AnyValues(error=all_point_errors), static=True)
+    rr.log("all_points", rr.Points3D(all_points_xyz, colors=all_point_colors), rr.AnyValues(error=all_point_errors), static=True)
     rr.log("Bar/avg_reproj_err", rr.BarChart(error_histogram), static=True)
     
     
     # Log points with colors based on reprojection error
     error_colors = map_error_to_color(all_point_errors)
-    rr.log("color_map_mean_repo_error", rr.Points3D(all_points, colors=error_colors), static=True)
+    rr.log("color_map_mean_repo_error", rr.Points3D(all_points_xyz, colors=error_colors), static=True)
     rr.log("color_map_mean_repo_error", rr.Scalar(all_point_errors), static=True)
 
     # Log points with colors based on track length
@@ -101,10 +97,9 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
          0]
         for length in track_lengths
     ]
-    rr.log("track_length", rr.Points3D(all_points, colors=track_colors), static=True)
+    rr.log("track_length", rr.Points3D(all_points_xyz, colors=track_colors), static=True)
     rr.log("track_length", rr.Scalar(track_lengths), static=True)
     rr.log("Bar/track_length", rr.BarChart(track_lengths_histo), static=True)
-    #colormap of reprojection error
     
     
     # Iterate through images (video frames) logging data related to each frame.
@@ -181,45 +176,68 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
             
         rr.log("camera/image/keypoints", rr.Points2D(visible_xys, colors=[34, 138, 167]))
 
+    filter_output = True
+    if filter_output:
+        # Filter out noisy points
+        filtered_points3D = {id: point for id, point in points3D.items() if point.rgb.any() and point.error < 1.4}
+    
+    center_point = np.mean([point.xyz for point in filtered_points3D.values()], axis=0)
+    rr.log("/filtered_points", rr.Points3D([point.xyz - center_point for point in filtered_points3D.values()], colors=[point.rgb for point in filtered_points3D.values()]), rr.AnyValues(error=[point.error for point in filtered_points3D.values()]), static=True)
+    #distance array of all points
+    distance_arr = [np.linalg.norm(point) for point in [point - center_point for point in [point.xyz for point in filtered_points3D.values()]]]
+    
+    # Calculate the 95th percentile distance
+    distance_95th_percentile = np.percentile(distance_arr, 95)
+    print(f"95th percentile distance after filtering: {distance_95th_percentile}")
+    distance_filtered_points=[point for point in filtered_points3D.values() if np.linalg.norm(point.xyz -center_point) < distance_95th_percentile]
+    rr.log("/filtered_points3D_95_distance", rr.Points3D([point.xyz for point in distance_filtered_points], colors=[point.rgb for point in distance_filtered_points]), rr.AnyValues(error=[point.error for point in distance_filtered_points]), static=True)
+
+    
+    filtered_points3D = {id: point for id, point in points3D.items() if point.rgb.any() and point.error < 1.4 and np.linalg.norm(point.xyz -center_point) < distance_95th_percentile} 
+    
+    return cameras, images, filtered_points3D
+    
+
 def Rerun_Colmap_Pipeline(workspace_path:str)->None:
-    # parser = ArgumentParser(description="Visualize the output of COLMAP's sparse reconstruction on a video.")
-    # parser.add_argument("--unfiltered", action="store_true", help="If set, we don't filter away any noisy data.")
-    # parser.add_argument(
-    #     "--dataset",
-    #     action="store",
-    #     default="colmap_rusty_car",
-    #     choices=["colmap_rusty_car", "colmap_fiat"],
-    #     help="Which dataset to download",
-    # )
-    # parser.add_argument("--resize", action="store", help="Target resolution to resize images")
-    # rr.script_add_args(parser)
-    # args = parser.parse_args()
-    # if args.resize:
-    #     args.resize = tuple(int(x) for x in args.resize.split("x"))
 
     rr.init("COLMAP_Visualization", recording_id= workspace_path, spawn=True)
 
     # Define a blueprint (layout) to organize how data appears
-    rr.send_blueprint(rrb.Blueprint(
-        rrb.Grid(
-            rrb.Spatial2DView(origin="/camera/image"),
-            rrb.Spatial3DView(origin="/", contents=["+ $origin/**", "- /all_points", "- /color_map_mean_repo_error/**", "- /track_length/**"]),
-            rrb.Tabs(
-                rrb.Spatial3DView(origin="all_points"),
-                rrb.Spatial3DView(origin="color_map_mean_repo_error"),
-                rrb.Spatial3DView(origin="track_length")
-            ),
-            rrb.Tabs(rrb.TimeSeriesView(origin="/plot/avg_reproj_err"),rrb.BarChartView(origin="/Bar")),
+    rr.send_blueprint(
+        rrb.Blueprint(
+            rrb.Grid(
+                rrb.Vertical(
+                    rrb.Horizontal(
+                        rrb.Spatial2DView(origin="/camera/image"),
+                        rrb.Spatial3DView(origin="/", contents=["+ $origin/**", "- /all_points", "- /color_map_mean_repo_error/**", "- /track_length/**", "- /filtered_points/**", "- /filtered_points3D_95_distance/**"]),
+                
+                    ),
+                    rrb.Tabs(
+                        rrb.Horizontal(rrb.Tabs(
+                            rrb.Spatial3DView(origin="all_points"),
+                            rrb.Spatial3DView(origin="color_map_mean_repo_error"),
+                            rrb.Spatial3DView(origin="track_length"),
+                            ),
+                            rrb.Tabs(rrb.TimeSeriesView(origin="/plot/avg_reproj_err"),rrb.BarChartView(origin="/Bar"))),
+                        rrb.Horizontal(
+                            rrb.Tabs(rrb.Spatial3DView(origin="filtered_points"),
+                            rrb.Spatial3DView(origin="filtered_points3D_95_distance"),
+                            )
+                            ),
+                    )
+                )
+            )
         )
-    ))
+    )
 
     dataset_path = Path(workspace_path)
     print(f"Using dataset at {dataset_path}")
-    read_and_log_sparse_reconstruction(dataset_path)
+    cameras, images, filtered_points3D=read_and_log_sparse_reconstruction(dataset_path)
+    return cameras, images, filtered_points3D
 
 if __name__ == "__main__":
     #main()
-    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\1_reso_005_sharp_no_mask")
+    Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\1_reso_0.1_sharp_circ_08_mask")
     # base_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments"
     # for folder in os.listdir(base_path):
     #     full_path = os.path.join(base_path, folder)
