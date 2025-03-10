@@ -24,57 +24,6 @@ import time  # Add import for time module
 #   |_ project.ini 
 #
 
-'''
-def get_user_input():
-    root = tk.Tk()
-    root.withdraw()  # Hide the root window
-
-    segments = 0.15
-    reduce_size = 0.75
-    square_crop = True
-    crop = 0.8
-
-    def on_submit():
-        nonlocal segments, reduce_size, square_crop, crop
-        segments = float(segments_var.get())
-        reduce_size = float(reduce_size_var.get()) if reduce_size_check_var.get() else None
-        square_crop = square_crop_var.get() == 1
-        crop = float(crop_var.get()) if crop_check_var.get() else None
-        input_window.destroy()
-
-    input_window = tk.Toplevel(root)
-    input_window.title("Input Options")
-
-    tk.Label(input_window, text="Segments:").grid(row=0, column=0)
-    segments_var = tk.StringVar(value="0.15")
-    tk.Entry(input_window, textvariable=segments_var).grid(row=0, column=1)
-
-    reduce_size_check_var = tk.IntVar(value=1)
-    tk.Checkbutton(input_window, text="Use Reduce Size", variable=reduce_size_check_var).grid(row=1, column=0)
-    reduce_size_var = tk.StringVar(value="0.75")
-    tk.Entry(input_window, textvariable=reduce_size_var).grid(row=1, column=1)
-
-    tk.Label(input_window, text="Square Crop:").grid(row=2, column=0)
-    square_crop_var = tk.IntVar(value=1)
-    tk.Checkbutton(input_window, variable=square_crop_var).grid(row=2, column=1)
-
-    crop_check_var = tk.IntVar(value=1)
-    tk.Checkbutton(input_window, text="Use Crop", variable=crop_check_var).grid(row=3, column=0)
-    crop_var = tk.StringVar(value="0.8")
-    tk.Entry(input_window, textvariable=crop_var).grid(row=3, column=1)
-
-    tk.Button(input_window, text="Submit", command=on_submit).grid(row=4, columnspan=2)
-
-    root.wait_window(input_window)
-
-    image_options = {
-        'reduce_size': float(reduce_size_var.get()) if reduce_size_check_var.get() else None,
-        'square_crop': square_crop_var.get() == 1,
-        'crop': float(crop_var.get()) if crop_check_var.get() else None,
-    }
-
-    return segments, image_options
-'''
 def log_time(log_file, step, elapsed_time):
     with open(log_file, 'a') as f:
         f.write(f"{step}: {elapsed_time:.2f} seconds\n")
@@ -107,7 +56,7 @@ def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segment
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
     if Masking:
-        masking.process_folder(sharp_image_path, image_mask_path,radius=0.8)
+        masking.process_folder(sharp_image_path, image_mask_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
@@ -199,14 +148,14 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\1_reso_002_sharp_no_mask"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\07_reso_05_sharp_no_mask"
         trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments'
-        experiment_description = ' 100% resolution, 2% of sharp images, no mask'
+        experiment_description = ' 70% resolution, 50% of sharp images, no mask'
     
     #segments, image_options = get_user_input()
     
-    resize_factor = 1.0
-    segments = 0.02
+    resize_factor = 0.7
+    segments = 0.5
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
