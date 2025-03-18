@@ -117,7 +117,7 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
     """Select indices of sharpest images, ensuring they are nearly equidistant and above a sharpness threshold."""
     
     # Convert percentage to a decimal if necessary
-    if segments <= 1.0:
+    if segments < 1:
         segments = int(len(sharpness_df) * segments)
     
     if len(sharpness_df) < segments:
@@ -149,8 +149,8 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
             
             selected_indices.append(above_threshold_df.iloc[closest_idx].name)
         else:
-            # No images in this segment meet the sharpness threshold; you might handle this case differently
-            pass
+            highest_threshold_df = segment_df[segment_df['Sharpness'] == segment_df['Sharpness'].max()]
+            selected_indices.append(highest_threshold_df.iloc[0].name)
 
     if input_path is not None:
         selected_image_path = os.path.join(input_path, f"Subset_{len(selected_indices)}/Images")
@@ -235,11 +235,11 @@ def copy_selected_images(selected_indices, src_folder, dest_folder, image_option
 
 def main():
 
-    input_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
+    input_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
     segments = .1  # or segments = 0.1
     image_options = {
-        'reduce_size': 0.5,
-        'square_crop': True,
+        # 'reduce_size': 0.5,
+        # 'square_crop': True,
         # 'crop' : .8,
     }
 

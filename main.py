@@ -151,9 +151,9 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test_Trial\1_reso_005_sharp_no_mask"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test_Trial'
-        experiment_description = ' 100% resolution, 5% of sharp images, no mask'
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_sharpness\1_reso_005_sharp_no_mask"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_sharpness'
+        experiment_description = ' 100% resolution, 5% of sharp images, no mask, even under 50% sharpness are images selected'
     
     #segments, image_options = get_user_input()
     
