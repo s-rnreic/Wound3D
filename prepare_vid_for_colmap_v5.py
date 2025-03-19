@@ -150,7 +150,10 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
             selected_indices.append(above_threshold_df.iloc[closest_idx].name)
         else:
             highest_threshold_df = segment_df[segment_df['Sharpness'] == segment_df['Sharpness'].max()]
-            selected_indices.append(highest_threshold_df.iloc[0].name)
+            if highest_threshold_df > sharpness_df['Sharpness'].quantile(95.0 / 100.0):
+                pass
+            else:
+                selected_indices.append(highest_threshold_df.iloc[0].name)
 
     if input_path is not None:
         selected_image_path = os.path.join(input_path, f"Subset_{len(selected_indices)}/Images")
