@@ -11,6 +11,7 @@ import build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
 from read_write_model import write_model
+import MVS_Meshing as mvs
 # user inserts a input_path and a workspace_path
 # workspace_path : path to a folder where all images (raw,sharp), the colmap data will be saved
 #
@@ -25,8 +26,12 @@ from read_write_model import write_model
 #
 
 def log_time(log_file, step, elapsed_time):
-    with open(log_file, 'a') as f:
-        f.write(f"{step}: {elapsed_time:.2f} seconds\n")
+    if elapsed_time is not None:
+        with open(log_file, 'a') as f:
+            f.write(f"{step}: {elapsed_time:.2f} seconds\n")
+    else:
+        with open(log_file, 'a') as f:
+            f.write(f"{step}: elapsed time is None\n")
 
 def calculate_total_elapsed_time(log_file):
     total_time = 0.0
@@ -117,6 +122,15 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str =
     if log_file and os.path.exists(log_file):
         log_time(log_file, "ANALYSE_COLMAP_OUTPUT", elapsed_time)
 
+def MVS(workspace_path:str, log_file:str)->None:
+    
+    elapse_time= mvs.execute_dense_reconstruction(workspace_path)
+    log_time(log_file, "MVS", elapse_time)
+
+
+def Meshing(workspace_path:str, log_file:str)->None:
+    elapse_time= mvs.execute_poisson_meshing(workspace_path)
+    log_time(log_file, "Meshing", elapse_time)
 
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
@@ -131,7 +145,7 @@ def run_colmap_process(video_path, segments, image_options):
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=False)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -140,6 +154,11 @@ def run_colmap_process(video_path, segments, image_options):
     cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
     write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    
+    MVS(workspace_path, log_file)
+    
+    Meshing(workspace_path, log_file)
+    
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
     print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
@@ -151,14 +170,14 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_sharpness\1_reso_005_sharp_no_mask"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_sharpness'
-        experiment_description = ' 100% resolution, 5% of sharp images, no mask, even under 50% sharpness are images selected'
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\T1"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
+        experiment_description = ' test'
     
     #segments, image_options = get_user_input()
     
     resize_factor = 1.0
-    segments = 0.05
+    segments = 0.1
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
