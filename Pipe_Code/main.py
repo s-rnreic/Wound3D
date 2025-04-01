@@ -12,6 +12,8 @@ import rerun_viewer
 import time  # Add import for time module
 from read_write_model import write_model
 import MVS_Meshing as mvs
+import SfM as sfm
+from pathlib import Path
 # user inserts a input_path and a workspace_path
 # workspace_path : path to a folder where all images (raw,sharp), the colmap data will be saved
 #
@@ -67,7 +69,8 @@ def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segment
     return sharp_image_path, image_mask_path
 
 # 2. COLMAP Pipeline
-def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path: str, log_file: str) -> str:
+
+def SfM_Pipeline(image_output_path: str, workspace_path: str, image_mask_path: str, log_file: str) -> str:
     start_time = time.time()
     global sparse_path
     total_ini_path = os.path.join(workspace_path, 'total_project.ini')
@@ -75,21 +78,13 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     # Each colmap command is executed with a tempProject.ini file --> file contains the parameter of each colmap command
     # construct the command to execute the batch file for creating a .ini file
     
-    #Feature Extraction
-    keywords = ['HEADER','ImageReader','SiftExtraction']
-    temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
-    os.system(f'call colmap feature_extractor --project_path "{temp_ini_path}"')
-    ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
+    #Feature Extraction and Matching
+    features, matches, pairs = sfm.LightGlue(Path(image_output_path), Path(workspace_path))
     
-    #Feature Matching
-    keywords = ['HEADER','SiftMatching','TwoViewGeometry','ExhaustiveMatching']
-    temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
-    ctpi.delete_keywords_from_project_ini(temp_ini_path, 'HEADER','image_path')
-    os.system(f'call colmap exhaustive_matcher --project_path "{temp_ini_path}"')
-    ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
+    #Create Database and import features and matches
+    sfm.Stream_into_db(Path(workspace_path), Path(image_output_path), pairs=pairs, features=features, matches=matches)
     
-    
-    #Mapping
+    #Global Mapping trough the GLOMAP pipeline
     sparse_path = os.path.join(workspace_path, 'sparse')
     os.makedirs(sparse_path, exist_ok=True)
     ctgi.create_glomap_ini(workspace_path + '\\glomap_config.ini')
@@ -97,7 +92,7 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     ctgi.execute_glomap(workspace_path + '\\glomap_config.ini', database_path, sparse_path, sharp_image_path)
     ctpi.append_to_total_project_ini(workspace_path + '\\glomap_config.ini', total_ini_path)
     elapsed_time = time.time() - start_time
-    log_time(log_file, "COLMAP_Pipeline", elapsed_time)
+    log_time(log_file, "SfM_Pipeline", elapsed_time)
 
     
     # #3. COLMAP RERUN Streaming
@@ -145,19 +140,19 @@ def run_colmap_process(video_path, segments, image_options):
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
+    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
     
-    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    SfM_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
     ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
     cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
-    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    #write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     MVS(workspace_path, log_file)
     
-    Meshing(workspace_path, log_file)
+    #Meshing(workspace_path, log_file)
     
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
@@ -170,9 +165,9 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\T1"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\Test"
         trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
-        experiment_description = ' test'
+        experiment_description = ' Test for new sfm'
     
     #segments, image_options = get_user_input()
     
