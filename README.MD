@@ -22,7 +22,7 @@ It provides a structured workflow for key steps such as feature extraction, matc
         - Alternatively, execute the COLMAP pipeline with predefined standard values 
     - Save results in the standard COLMAP folder structure as sparse.
         - Output workspace structure:
-
+```
         --  Workspace
             |   database.db
             |   glomap_config.ini
@@ -37,7 +37,7 @@ It provides a structured workflow for key steps such as feature extraction, matc
                         cameras.bin
                         images.bin
                         points3D.bin
-                        
+```              
 
     - For each execution the main.py: saving relative Parameters in sqlite3 Database "Trial.db"
 
@@ -96,7 +96,7 @@ Follow these steps to set up and run the pipeline:
 ### 1. Clone the Repository
 Copy the repository to your local machine:
 ```bash
-git clone <repository-url>
+git clone https://pm-gitlab.intranet.inp-greifswald.de/pqk/colmap_test.git
 cd COLMAP_Pipline
 ```
 
@@ -157,5 +157,5 @@ You can also visualize the reconstruction using the Rerun viewer.
 
 **common errors**:
     - [WinError] subprocess cant be executed --> resolve by executing the main.py again
-    
+
 For further details, refer to the "Pipeline Components" section above.
