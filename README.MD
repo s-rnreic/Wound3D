@@ -84,14 +84,14 @@ It provides a structured workflow for key steps such as feature extraction, matc
 
 The visualization of the trial is achieved via the Rerun viewer.
 
-<video width="640" height="360" controls>
-  <source src="video.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+![Alt Text](git_images\Pipeline_Roadmap-Page-2.drawio.svg)
 
 ## How to Use
 
 Follow these steps to set up and run the pipeline:
+
+**NOTE:** Most common SfM-Pipelines make use of Nvidia's CUDA. Make sure that your system supports CUDA and has the 
+required properties
 
 ### 1. Clone the Repository
 Copy the repository to your local machine:
@@ -101,12 +101,13 @@ cd COLMAP_Pipline
 ```
 
 ### 2. Install Dependencies
-Ensure you have the required dependencies installed. Use the following commands to set up the environment:
+Ensure you have the required dependencies installed. Before installing the dependencies, make sure that you are familiar with a virtual environment and know how to set it up.
+Use the following commands to set up the environment:
 ```bash
 pip install -r requirements.txt
 ```
 Make sure you have the following additional tools installed:
-- **COLMAP**: [Download and install COLMAP](https://colmap.github.io/).
+- **COLMAP**: [Download and install COLMAP](https://colmap.github.io/). Make sure that you can access it from a cmd (you added it to PATH)
 - **FFmpeg**: Ensure FFmpeg is installed and added to your system's PATH.
 - **Git**: Required for version control.
 
