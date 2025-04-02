@@ -4,4 +4,6 @@ matplotlib
 tqdm
 rerun-sdk
 requests
-tk
+pandas
+ffmpeg
+trimesh
