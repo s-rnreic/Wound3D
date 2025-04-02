@@ -3,6 +3,7 @@
 An SfM (Structure from Motion) pipeline is needed to systematically process multiple images and reconstruct a 3D scene while ensuring accuracy and robustness. 
 It provides a structured workflow for key steps such as feature extraction, matching, camera pose estimation, sparse reconstruction, and dense reconstruction. This Git repository offers a handcrafted SfM Pipeline for a 3D wound reconstruction which gives the user all options for obtaining a 3D sparse, dense or mesh reconstruction out of a provided Video. The Pipeline was optimized for medical wound image reconstrcution.
 
+![](git_images/Pipeline_Roadmap-Page-2.svg)
 
 ### Pipeline Components
 
@@ -62,6 +63,10 @@ It provides a structured workflow for key steps such as feature extraction, matc
         - The output is a watertight mesh (`poisson.ply`) that can be used for visualization or further processing.
     - This step ensures a smooth and continuous surface representation of the reconstructed scene.
 
+6. **Visualization**
+
+<img src="git_images/poisson_mesh.png" width="700">
+
 
 ### Features of the Glomap Pipeline in `main.py`
 
@@ -84,7 +89,7 @@ It provides a structured workflow for key steps such as feature extraction, matc
 
 The visualization of the trial is achieved via the Rerun viewer.
 
-![Alt Text](git_images\Pipeline_Roadmap-Page-2.drawio.svg)
+![](git_images/Rerun_visulization.png)
 
 ## How to Use
 
