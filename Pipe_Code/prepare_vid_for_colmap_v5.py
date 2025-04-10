@@ -238,7 +238,7 @@ def copy_selected_images(selected_indices, src_folder, dest_folder, image_option
 
 def main():
 
-    input_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
+    input_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\IDS\Mandarine_3Orbit.avi"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
     segments = .1  # or segments = 0.1
     image_options = {
         # 'reduce_size': 0.5,
@@ -246,27 +246,18 @@ def main():
         # 'crop' : .8,
     }
 
-    base_dir = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
+    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\IDS\Mandarine_Orbit3"
+    os.makedirs(base_dir, exist_ok=True)
+    raw_images_path = os.path.join(base_dir, 'raw_images')
+    os.makedirs(raw_images_path, exist_ok=True)
+    sharp_image_path = os.path.join(base_dir, 'sharp_images')
+    os.makedirs(sharp_image_path, exist_ok=True)
+    get_IMG_from_Video(input_path, raw_images_path)
+    
+    sharpness_values = get_image_sharpness(raw_images_path, image_options)
+    selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
+    copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
 
-    if os.path.isdir(input_path):
-        # If the input is a directory
-        raw_image_path = input_path
-    elif os.path.isfile(input_path) and input_path.lower().endswith(('.mp4', '.avi', '.mov')):
-        # If the input is a video file
-        raw_image_folder = 'Images_RAW'
-        raw_image_path = os.path.join(base_dir, raw_image_folder)
-
-        if not os.path.exists(raw_image_path):
-            extract_images_from_video(input_path, raw_image_path)
-    else:
-        raise ValueError("Invalid input path. Please provide a valid video file or a directory containing images.")
-
-
-    sharpness_df = get_image_sharpness(raw_image_path, image_options)
-    selected_indices = select_sharp_images(sharpness_df, segments, input_path=base_dir)
-
-    selected_image_path = os.path.join(base_dir, f"Subset_{len(selected_indices)}/Images")
-    copy_selected_images(selected_indices, raw_image_path, selected_image_path, image_options)
 
 
 if __name__ == "__main__":
