@@ -5,8 +5,9 @@ import create_temp_project_ini as ctpi
 import create_temp_glomap_ini as ctgi
 import sfm_database
 import subprocess
-import tkinter as tk
-from tkinter import filedialog, simpledialog  # Add simpledialog for user input
+from run_command import run_command
+# import tkinter as tk
+# from tkinter import filedialog, simpledialog  # Add simpledialog for user input
 import build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
@@ -78,24 +79,27 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     #Feature Extraction
     keywords = ['HEADER','ImageReader','SiftExtraction']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
-    os.system(f'call colmap feature_extractor --project_path "{temp_ini_path}"')
+    feature_extractor_command=f'colmap feature_extractor --project_path "{temp_ini_path}"'
+    run_command(feature_extractor_command)
     ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
     
     #Feature Matching
     keywords = ['HEADER','SiftMatching','TwoViewGeometry','ExhaustiveMatching']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
     ctpi.delete_keywords_from_project_ini(temp_ini_path, 'HEADER','image_path')
-    os.system(f'call colmap exhaustive_matcher --project_path "{temp_ini_path}"')
+    feature_matching_command=f'colmap exhaustive_matcher --project_path "{temp_ini_path}"'
+    run_command(feature_matching_command)
     ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
     
     
     #Mapping
     sparse_path = os.path.join(workspace_path, 'sparse')
     os.makedirs(sparse_path, exist_ok=True)
-    ctgi.create_glomap_ini(workspace_path + '\\glomap_config.ini')
+    global_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
+    ctgi.create_glomap_ini(global_ini_path)
     #open_ini_in_editor(workspace_path + '\\glomap_config.ini')
-    ctgi.execute_glomap(workspace_path + '\\glomap_config.ini', database_path, sparse_path, sharp_image_path)
-    ctpi.append_to_total_project_ini(workspace_path + '\\glomap_config.ini', total_ini_path)
+    ctgi.execute_glomap(global_ini_path, database_path, sparse_path, sharp_image_path)
+    ctpi.append_to_total_project_ini(global_ini_path, total_ini_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_Pipeline", elapsed_time)
 
@@ -145,7 +149,7 @@ def run_colmap_process(video_path, segments, image_options):
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
+    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -169,9 +173,9 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\COLMAP\VID\Ferse_3+4.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\T1"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
+        video_path = r"/home/reich/Videos/Mandarine_1Orbit.avi"
+        workspace_path = r"/home/reich/Trails/T1"
+        trial_database_path = r'/home/reich/Trails'
         experiment_description = ' test'
     
     #segments, image_options = get_user_input()

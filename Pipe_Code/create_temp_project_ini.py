@@ -1,15 +1,17 @@
 import configparser
 import os
+from run_command import run_command
 
 def setup_project_ini(workspace_path: str, *keywords) -> str:
-    ini_file_command = f'call colmap project_generator --output_path "{workspace_path}\\project.ini" --quality high '
-    os.system(ini_file_command)
-    
-    db_file_command = f'call colmap database_creator --database_path "{workspace_path}\\database.db"'
-    os.system(db_file_command)
-    
     project_ini_path = os.path.join(workspace_path, 'project.ini')
     database_path = os.path.join(workspace_path, 'database.db')
+    
+    ini_file_command = f'colmap project_generator --output_path "{project_ini_path}" --quality high '
+    run_command(ini_file_command)
+    
+    db_file_command = f'colmap database_creator --database_path "{database_path}"'
+    run_command(db_file_command)
+    
     
     with open(project_ini_path, 'r', encoding='utf-8') as file:
         lines = file.readlines()
@@ -142,8 +144,8 @@ def append_to_total_project_ini(temp_ini_path, total_ini_path):
 
 
 def execute_tepm_project_ini(ini_path, *keywords):
-    command = f'call colmap {keywords[0]} --project_path "{ini_path}"'
-    os.system(command)
+    command = f'colmap {keywords[0]} --project_path "{ini_path}"'
+    run_command(command)
 
 def standard_ini_pipline(workspace_path, image_path, mask_path, *keywords):
     ini_path, database_path=setup_project_ini(workspace_path)
