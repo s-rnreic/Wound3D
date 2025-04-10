@@ -139,7 +139,7 @@ def insert_MOS(database_path: str, mos_values: dict, trial_id: int) -> None:
     conn.commit()
     conn.close()
 
-def open_mos_window(database_path: str):
+def open_mos_window(database_path: str, trial_id: int =None):
     def submit():
         try:
             trial_id = int(trial_id_entry.get())
@@ -162,8 +162,13 @@ def open_mos_window(database_path: str):
     window = tk.Tk()
     window.title("Insert MOS Values")
 
+    
+        
+    
     tk.Label(window, text="Trial ID:").grid(row=0, column=0)
     trial_id_entry = tk.Entry(window)
+    if not trial_id is None:
+        trial_id_entry=trial_id
     trial_id_entry.grid(row=0, column=1)
 
     tk.Label(window, text="MOS:").grid(row=1, column=0)
