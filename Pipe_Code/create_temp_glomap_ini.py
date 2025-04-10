@@ -51,6 +51,7 @@
 
 import os
 import configparser
+from run_command import run_command
 
 def create_glomap_ini(file_path):
     config = configparser.ConfigParser()
@@ -113,7 +114,7 @@ def execute_glomap(ini_file_path, database_path, output_path, image_path):
     for key in config['DEFAULT']:
         command += f" --{key} {config['DEFAULT'][key]}"
     
-    os.system(command)
+    run_command(command)
 
 # Example usage:
 # create_glomap_ini('glomap_config.ini')
