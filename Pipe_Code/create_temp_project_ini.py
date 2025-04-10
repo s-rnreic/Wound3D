@@ -3,36 +3,37 @@ import os
 from run_command import run_command
 
 def setup_project_ini(workspace_path: str, *keywords) -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_project_ini_path = os.path.join(script_dir, 'base_project.ini')
     project_ini_path = os.path.join(workspace_path, 'project.ini')
     database_path = os.path.join(workspace_path, 'database.db')
-    
-    ini_file_command = f'colmap project_generator --output_path "{project_ini_path}" --quality high '
-    run_command(ini_file_command)
-    
+
+    if os.path.exists(base_project_ini_path):
+        # Copy base_project.ini to the workspace as project.ini
+        with open(base_project_ini_path, 'r', encoding='utf-8') as base_file:
+            base_content = base_file.read()
+        with open(project_ini_path, 'w', encoding='utf-8') as project_file:
+            project_file.write(base_content)
+    else:
+        # Generate project.ini using colmap
+        ini_file_command = f'colmap project_generator --output_path "{project_ini_path}" --quality high '
+        run_command(ini_file_command)
+
+    # Create database file
     db_file_command = f'colmap database_creator --database_path "{database_path}"'
     run_command(db_file_command)
-    
-    
-    with open(project_ini_path, 'r', encoding='utf-8') as file:
-        lines = file.readlines()
-    
-    if not lines[0].startswith('['):
-        lines.insert(0, '[HEADER]\n')
-    
-    with open(project_ini_path, 'w', encoding='utf-8') as file:
-        file.writelines(lines)
-    
+
+    # Ensure [HEADER] section exists and add database_path
     config = configparser.ConfigParser()
     config.read(project_ini_path)
-    
+
     if 'HEADER' not in config:
         config['HEADER'] = {}
-    
+
     config['HEADER']['database_path'] = database_path
-    
+
     with open(project_ini_path, 'w', encoding='utf-8') as configfile:
         config.write(configfile)
-
 
     return project_ini_path, database_path
    
