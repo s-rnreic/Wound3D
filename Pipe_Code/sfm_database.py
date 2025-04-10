@@ -1,8 +1,8 @@
 import os
 import sqlite3
 import subprocess
-# import tkinter as tk
-# from tkinter import ttk, messagebox
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 # Creates and manages the database of the colmap/glomap Pipeline
 # TODO: add reference tables from the database.db (cameras,image,features,pose_prior etc.) --> are they nessessary?
