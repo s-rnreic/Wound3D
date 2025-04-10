@@ -121,8 +121,9 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
         segments = int(len(sharpness_df) * segments)
     
     if len(sharpness_df) < segments:
-        print("Too few images.")
-        return
+        print("Too few images. Algorithm takes now the maximal number of images.")
+        segments = len(sharpness_df)
+        
     
     print(f"Selecting {segments} images from {len(sharpness_df)} images.")
     
