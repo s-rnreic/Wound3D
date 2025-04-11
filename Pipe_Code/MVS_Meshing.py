@@ -19,7 +19,7 @@ def execute_poisson_meshing(folder_path):
     
     try:
         # Run poisson meshing
-        run_command(f'colmap poisson_mesher --input_path {os.path.join(dense_path, "fused.ply")} --output_path {os.path.join(dense_path, "poisson.ply")}')
+        run_command(f"colmap poisson_mesher --input_path '{os.path.join(dense_path, 'fused.ply')}' --output_path '{os.path.join(dense_path, 'poisson.ply')}'")
     except Exception as e:
         print("Poisson meshing failed: ", e)
         return
@@ -48,19 +48,19 @@ def execute_dense_reconstruction(folder_path):
     
     try:
         # Run image undistorter
-        run_command(f'colmap image_undistorter --image_path {os.path.join(dataset_path, "sharp_images")} --input_path {os.path.join(dataset_path, "sparse", "0")} --output_path {dense_path} --output_type COLMAP')
+        run_command(f"colmap image_undistorter --image_path '{os.path.join(dataset_path, 'sharp_images')}' --input_path '{os.path.join(dataset_path, 'sparse', '0')}' --output_path '{dense_path}' --output_type COLMAP")
         
         # Run patch match stereo
-        run_command(f'colmap patch_match_stereo --workspace_path {dense_path} --workspace_format COLMAP --PatchMatchStereo.geom_consistency true')
+        run_command(f"colmap patch_match_stereo --workspace_path '{dense_path}' --workspace_format COLMAP --PatchMatchStereo.geom_consistency true")
         
         # Run stereo fusion
         mask_path = os.path.join(folder_path, "masks")
         if os.path.exists(mask_path):
-            run_command(f'colmap stereo_fusion --workspace_path {dense_path} --workspace_format COLMAP --input_type geometric --output_path {os.path.join(dense_path,)} --output_type BIN --StereoFusion.mask_path {mask_path}')
-            run_command(f'colmap stereo_fusion --workspace_path {dense_path} --workspace_format COLMAP --input_type geometric --output_path {os.path.join(dense_path,"fused.ply")} --output_type PLY --StereoFusion.mask_path {mask_path}')        
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN --StereoFusion.mask_path '{mask_path}'")
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY --StereoFusion.mask_path '{mask_path}'")        
         else:
-            run_command(f'colmap stereo_fusion --workspace_path {dense_path} --workspace_format COLMAP --input_type geometric --output_path {os.path.join(dense_path,)} --output_type BIN')
-            run_command(f'colmap stereo_fusion --workspace_path {dense_path} --workspace_format COLMAP --input_type geometric --output_path {os.path.join(dense_path,"fused.ply")} --output_type PLY')        
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN")
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY")        
         
     except Exception as e:
         print("Reconstruction failed")

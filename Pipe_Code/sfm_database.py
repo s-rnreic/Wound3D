@@ -70,8 +70,8 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
     images_path = os.path.join(sparse_folder, 'images.bin')
     points3D_path = os.path.join(sparse_folder, 'points3D.bin')
     
-    result = subprocess.run(f"colmap model_analyzer --path {sparse_folder}", shell=True, capture_output=True, text=True)
-    #print(result.stderr)
+    result = subprocess.run(f'colmap model_analyzer --path "{sparse_folder}"', shell=True, capture_output=True, text=True)
+    print(result)
      # Analyze the output
     output_lines = result.stderr.split('\n')
     observations = None
@@ -167,8 +167,8 @@ def open_mos_window(database_path: str, trial_id: int =None):
     
     tk.Label(window, text="Trial ID:").grid(row=0, column=0)
     trial_id_entry = tk.Entry(window)
-    if not trial_id is None:
-        trial_id_entry=trial_id
+    # if not trial_id is None:
+    #     trial_id_entry=trial_id
     trial_id_entry.grid(row=0, column=1)
 
     tk.Label(window, text="MOS:").grid(row=1, column=0)

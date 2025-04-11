@@ -109,7 +109,7 @@ def execute_glomap(ini_file_path, database_path, output_path, image_path):
     config.optionxform = str
     config.read(ini_file_path)
 
-    command = f"glomap mapper --database_path {database_path} --output_path {output_path} --image_path {image_path} "
+    command = f"glomap mapper --database_path \"{database_path}\" --output_path \"{output_path}\" --image_path \"{image_path}\""
     
     for key in config['DEFAULT']:
         command += f" --{key} {config['DEFAULT'][key]}"

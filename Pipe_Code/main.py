@@ -32,13 +32,15 @@ def log_time(log_file, step, elapsed_time):
             f.write(f"{step}: {elapsed_time:.2f} seconds\n")
     else:
         with open(log_file, 'a') as f:
-            f.write(f"{step}: elapsed time is None\n")
+            f.write(f'{step}: elapsed time is None\n')
 
 def calculate_total_elapsed_time(log_file):
     total_time = 0.0
     with open(log_file, 'r') as f:
         for line in f:
             time_str = line.split(':')[-1].strip().split()[0]
+            if time_str == 'elapsed':
+                continue
             total_time += float(time_str)
     return total_time
 
@@ -79,7 +81,7 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     #Feature Extraction
     keywords = ['HEADER','ImageReader','SiftExtraction']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
-    feature_extractor_command=f'colmap feature_extractor --project_path "{temp_ini_path}"'
+    feature_extractor_command = f"colmap feature_extractor --project_path \"{temp_ini_path}\""
     run_command(feature_extractor_command)
     ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
     
@@ -87,7 +89,7 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     keywords = ['HEADER','SiftMatching','TwoViewGeometry','ExhaustiveMatching']
     temp_ini_path=ctpi.create_temp_project_ini(ini_path, *keywords)
     ctpi.delete_keywords_from_project_ini(temp_ini_path, 'HEADER','image_path')
-    feature_matching_command=f'colmap exhaustive_matcher --project_path "{temp_ini_path}"'
+    feature_matching_command = f"colmap exhaustive_matcher --project_path \"{temp_ini_path}\""
     run_command(feature_matching_command)
     ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
     
@@ -119,7 +121,7 @@ def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str =
     subfolders = [os.path.join(sparse_path, subfolder) for subfolder in os.listdir(sparse_path) if os.path.isdir(os.path.join(sparse_path, subfolder))]
     
     for subfolder in subfolders:
-        result = subprocess.run(f"colmap model_analyzer --path {subfolder}", shell=True, capture_output=True, text=True)
+        result = subprocess.run(f"colmap model_analyzer --path \"{subfolder}\"", shell=True, capture_output=True, text=True)
         print(result.stderr)
     
     elapsed_time = time.time() - start_time
@@ -173,24 +175,23 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"/home/reich/Videos/Mandarine_1Orbit.avi"
-        workspace_path = r"/home/reich/Trails/T1"
-        trial_database_path = r'/home/reich/Trails'
-        experiment_description = ' test'
+        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit1.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\Phone\Mandarin_Orbit1_2"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1'
+        experiment_description = ' Reco Mandarin_Phone_Orbit1_2, Poco X3, 10 images of one orbital drive, Masking via thresholdig in HSV, second Trial. Activated DSP and maxed the max number of matches/keypoints etc.'
     
-    #segments, image_options = get_user_input()
     
     resize_factor = 1.0
-    segments = 0.1
+    segments = 10
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
         #'crop': 0.8,
     }
-    total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    #total_elapsed_time = run_colmap_process(video_path, segments, image_options)
     
     
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=293.20)#total_elapsed_time)
 
     
 

@@ -15,7 +15,7 @@ import requests
 import rerun as rr  # pip install rerun-sdk
 from tqdm import tqdm
 import sys
-sys.path.append(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\external")  # Add this line
+sys.path.append('C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\external')  # Add this line
 from read_write_model import Camera, read_model  # type: ignore[attr-defined]
 import matplotlib.pyplot as plt
 
@@ -65,7 +65,7 @@ def map_error_to_color(errors: list[float]) -> list[list[int]]:
 
 def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=False, resize: tuple[int, int]=None):
     #print("Reading sparse COLMAP reconstruction")
-    sparse_path = dataset_path / "sparse//0"
+    sparse_path = dataset_path / 'sparse/0'
     cameras, images, points3D = read_model(sparse_path, ext=".bin")
 
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
@@ -107,8 +107,8 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
     # Iterate through images (video frames) logging data related to each frame.
     image_list = sorted(images.values(), key=lambda im: im.name)
     for image in image_list:  # type: ignore[no-any-return]
-        image_file = dataset_path / "sharp_images" / image.name
-        mask_file = dataset_path / "masks" / (image.name + '.png')
+        image_file = dataset_path / 'sharp_images' / image.name
+        mask_file = dataset_path / 'masks' / f"{image.name}.png"
         if not os.path.exists(image_file):
             continue
 
@@ -202,7 +202,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
 
 def Rerun_Colmap_Pipeline(workspace_path:str)->None:
 
-    rr.init("COLMAP_Visualization", recording_id= workspace_path, spawn=True)
+    rr.init('COLMAP_Visualization', recording_id=workspace_path, spawn=True)
 
     # Define a blueprint (layout) to organize how data appears
     rr.send_blueprint(

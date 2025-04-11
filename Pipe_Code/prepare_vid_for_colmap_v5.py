@@ -239,15 +239,15 @@ def copy_selected_images(selected_indices, src_folder, dest_folder, image_option
 
 def main():
 
-    input_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\IDS\Mandarine_3Orbit.avi"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
-    segments = .1  # or segments = 0.1
+    input_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit3.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
+    segments = 50  # or segments = 0.1
     image_options = {
         # 'reduce_size': 0.5,
         # 'square_crop': True,
         # 'crop' : .8,
     }
 
-    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\IDS\Mandarine_Orbit3"
+    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\Phone\Mandarin_Orbit3_4"
     os.makedirs(base_dir, exist_ok=True)
     raw_images_path = os.path.join(base_dir, 'raw_images')
     os.makedirs(raw_images_path, exist_ok=True)

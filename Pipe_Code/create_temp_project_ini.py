@@ -16,11 +16,11 @@ def setup_project_ini(workspace_path: str, *keywords) -> str:
             project_file.write(base_content)
     else:
         # Generate project.ini using colmap
-        ini_file_command = f'colmap project_generator --output_path "{project_ini_path}" --quality high '
+        ini_file_command = f'colmap project_generator --output_path \"{project_ini_path}\" --quality high'
         run_command(ini_file_command)
 
     # Create database file
-    db_file_command = f'colmap database_creator --database_path "{database_path}"'
+    db_file_command = f'colmap database_creator --database_path \"{database_path}\"'
     run_command(db_file_command)
 
     # Ensure [HEADER] section exists and add database_path
@@ -145,7 +145,7 @@ def append_to_total_project_ini(temp_ini_path, total_ini_path):
 
 
 def execute_tepm_project_ini(ini_path, *keywords):
-    command = f'colmap {keywords[0]} --project_path "{ini_path}"'
+    command = f'colmap {keywords[0]} --project_path \"{ini_path}\"'
     run_command(command)
 
 def standard_ini_pipline(workspace_path, image_path, mask_path, *keywords):
