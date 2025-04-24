@@ -12,10 +12,11 @@ def run_command(command):
     try:
         ## Check the OS
         if os.name == 'nt':  # Windows
-            # For Windows, we can run the command directly as a string
+            # For Windows, ensure the command is properly quoted
             print("working on Windows")
             command = shlex.split(command)
-            result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            result = subprocess.run(command, check=True, shell=True)
+            #print(result.stdout.decode())
         else:  # Assuming it's a Unix-like system (Linux/macOS)
             # For Unix-like systems, we should also be able to run the command directly
             print("working on Unix")
