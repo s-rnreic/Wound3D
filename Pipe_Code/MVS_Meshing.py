@@ -19,7 +19,7 @@ def execute_poisson_meshing(folder_path):
     
     try:
         # Run poisson meshing
-        run_command(f"colmap poisson_mesher --input_path '{os.path.join(dense_path, 'fused.ply')}' --output_path '{os.path.join(dense_path, 'poisson.ply')}'")
+        run_command(f"colmap poisson_mesher --input_path '{os.path.join(dense_path, 'fused.ply')}' --output_path '{os.path.join(dense_path, 'poisson.ply')}' --PoissonMeshing.trim 7")
     except Exception as e:
         print("Poisson meshing failed: ", e)
         return
