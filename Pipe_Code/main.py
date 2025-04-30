@@ -13,6 +13,7 @@ import rerun_viewer
 import time  # Add import for time module
 from read_write_model import write_model
 import MVS_Meshing as mvs
+
 # user inserts a input_path and a workspace_path
 # workspace_path : path to a folder where all images (raw,sharp), the colmap data will be saved
 #
@@ -56,13 +57,14 @@ def create_workspace(workspace_path:str)->None:
 
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict, enhance_option:str , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
     
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
+    prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
     if Masking:
         masking.process_folder(sharp_image_path, image_mask_path)
     elapsed_time = time.time() - start_time
@@ -143,7 +145,7 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options):
+def run_colmap_process(video_path, segments, image_options, enhance_option=None)->float:
     global ini_path, database_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
@@ -151,15 +153,15 @@ def run_colmap_process(video_path, segments, image_options):
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
+    # Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=True)
     
-    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    # COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    # ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    #cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
-    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    #write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     MVS(workspace_path, log_file)
     
@@ -175,27 +177,55 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit1.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\Phone\Mandarin_Orbit1_2"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1'
-        experiment_description = ' Reco Mandarin_Phone_Orbit1_2, Poco X3, 10 images of one orbital drive, Masking via thresholdig in HSV, second Trial. Activated DSP and maxed the max number of matches/keypoints etc.'
+        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Zimtschnecke\Phone\Zimtschnecke_Phone_Orbit2.mp4"
+        workspace_path = r"Experiments_Peach/Zimtschnecke/Phone/Zimtschnecke_Orbit2_10"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Zimtschnecke'
+        experiment_description = ' Reco Zimtschnecke_Phone_Orbit2, Poco X3, 25 images of two orbital drives, no Masking. Activated DSP and maxed the max number of matches/keypoints etc. \n NO FILTERING OF POINTS3D. Camera: OPENCV , no custom camera parameter  '
     
     
     resize_factor = 1.0
-    segments = 10
+    segments = 25
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
         #'crop': 0.8,
     }
-    #total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    total_elapsed_time = run_colmap_process(video_path, segments, image_options)
     
     
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=293.20)#total_elapsed_time)
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
 
-    
 
 if __name__ == '__main__':
 
-    main()
+    #main()
+    
+    global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
+
+    video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
+    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement'
+
+    base_workspace_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement'
+    experiment_description = ' Trials for enhancement methods on Ferse_3+4, 100% resolution, 40 images'
+
+    resize_factor = 1.0
+    segments = 40
+    image_options = {
+        'reduce_size': resize_factor,
+        #'square_crop': True,
+        #'crop': 0.8,
+    }
+
+    workspace_path = f"{base_workspace_path}_GT"
+    total_elapsed_time = run_colmap_process(video_path, segments, image_options, enhance_option=None)
+
+    sfm_database.load_existing_experiments(
+        trial_database_path,
+        workspace_path,
+        experiment_description=f"{experiment_description} - Enhancement: NONE",
+        resize_factor=resize_factor,
+        fraction_of_images=segments,
+        elapsed_time=total_elapsed_time
+    )
+
 
