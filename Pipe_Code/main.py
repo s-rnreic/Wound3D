@@ -13,6 +13,7 @@ import rerun_viewer
 import time  # Add import for time module
 from read_write_model import write_model
 import MVS_Meshing as mvs
+from itertools import product
 # user inserts a input_path and a workspace_path
 # workspace_path : path to a folder where all images (raw,sharp), the colmap data will be saved
 #
@@ -143,22 +144,22 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options):
+def run_colmap_process(video_path, segments, image_options, custom_parameters=None):
     global ini_path, database_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
     create_workspace(workspace_path)
-    ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
-    #open_ini_in_editor(ini_path)
-    
-    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
-    
-    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
-    
-    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
-    
-    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
-    
+    ini_path, database_path = ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
+
+    if custom_parameters:
+        for header, param, value in custom_parameters:
+            ctpi.insert_keywords_to_project_ini(ini_path, header, param, value)
+
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=False)
+    COLMAP_Pipeline(sharp_image_path, workspace_path, image_mask_path, log_file)
+    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path, log_file)
+
+    cameras, images, filtered_points3D = COLMAP_RERUN(workspace_path, log_file)
     write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     MVS(workspace_path, log_file)
@@ -170,15 +171,16 @@ def run_colmap_process(video_path, segments, image_options):
     print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
     return total_elapsed_time        
 
+
 def main()->None:
     TEST = True
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit1.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\Phone\Mandarin_Orbit1_2"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1'
-        experiment_description = ' Reco Mandarin_Phone_Orbit1_2, Poco X3, 10 images of one orbital drive, Masking via thresholdig in HSV, second Trial. Activated DSP and maxed the max number of matches/keypoints etc.'
+        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Zimtschnecke\Phone\Zimtschnecke_Phone_Orbit2.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_SIFT"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_SIFT'
+        experiment_description = ' Reco Zimtschnecke_Phone_Orbit2, Poco X3, 25 images of two orbital drive, '
     
     
     resize_factor = 1.0
@@ -196,6 +198,50 @@ def main()->None:
     
 
 if __name__ == '__main__':
+    video_path = r"C:\\Users\\Reich\\Interface\\Videos\\Food_Recordings\\Zimtschnecke\\Phone\\Zimtschnecke_Phone_Orbit2.mp4"
+    base_workspace_path = r"C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\Experiments_SIFT"
+    trial_database_path = r'C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\Experiments_SIFT'
 
-    main()
+    resize_factor = 1.0
+    segments = 10
+    image_options = {
+        'reduce_size': resize_factor,
+    }
 
+    parameter_ranges = [
+        ('SiftExtraction', 'num_octaves', [2, 5, 10]),
+        ('SiftExtraction', 'octave_resolution', [1, 5, 10]),
+        ('SiftExtraction', 'max_num_orientations', [1, 2, 3]),
+        ('SiftExtraction', 'peak_threshold', [0.003, 0.0066666666666666671, 0.008]),
+        ('SiftExtraction', 'edge_threshold', [5, 10, 20]),
+        ('SiftMatching', 'max_ratio', [0.7, 0.8, 0.9]),
+        ('SiftMatching', 'max_distance', [0.5, 0.7, 1.1])
+    ]
+
+    trial_number = 500
+
+    # Generate all combinations of parameters
+    parameter_combinations = list(product(*[[(header, param, value) for value in values] for header, param, values in parameter_ranges]))
+
+    for combination in parameter_combinations:
+            workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
+            experiment_description = "Reco Zimtschnecke_Phone_Orbit2, Poco X3, 25 images of two orbital drive, Experiment with " + \
+                                ", ".join([f"{header} -> {param} = {value}" for header, param, value in combination])
+
+            custom_parameters = [(header, param, str(value)) for header, param, value in combination]
+
+            # Execute the COLMAP process with the updated parameters
+            total_elapsed_time = run_colmap_process(video_path, segments, image_options, custom_parameters)
+            print(f"Completed run with {', '.join([f'{header} -> {param} = {value}' for header, param, value in combination])}, Total elapsed time: {total_elapsed_time:.2f} seconds")
+
+            # Log the experiment in the database
+            sfm_database.load_existing_experiments(
+                trial_database_path,
+                workspace_path,
+                experiment_description=experiment_description,
+                resize_factor=resize_factor,
+                fraction_of_images=segments,
+                elapsed_time=total_elapsed_time
+            )
+
+            trial_number += 1
