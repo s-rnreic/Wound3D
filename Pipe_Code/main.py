@@ -57,14 +57,15 @@ def create_workspace(workspace_path:str)->None:
 
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict, enhance_option:str , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict, enhance_option:str=None , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
     
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
-    prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
+    if enhance_option is not None:
+        prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
     if Masking:
         masking.process_folder(sharp_image_path, image_mask_path)
     elapsed_time = time.time() - start_time
@@ -153,15 +154,15 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None)
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    # Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=True)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=True)
     
-    # COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    # ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    #cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
-    #write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     MVS(workspace_path, log_file)
     
