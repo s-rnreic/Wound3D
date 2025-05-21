@@ -57,13 +57,15 @@ def create_workspace(workspace_path:str)->None:
 
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict, enhance_option:str=None , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.get_IMG_from_Video(input_path, raw_images_path)
     
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path, image_options)
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
+    if enhance_option is not None:
+        prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
     if Masking:
         masking.process_folder(sharp_image_path, image_mask_path)
     elapsed_time = time.time() - start_time
@@ -144,22 +146,26 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options, custom_parameters=None):
+def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None)->float:
     global ini_path, database_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
     create_workspace(workspace_path)
-    ini_path, database_path = ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
-
+    ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
+    #open_ini_in_editor(ini_path)
+    
     if custom_parameters:
         for header, param, value in custom_parameters:
             ctpi.insert_keywords_to_project_ini(ini_path, header, param, value)
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=False)
-    COLMAP_Pipeline(sharp_image_path, workspace_path, image_mask_path, log_file)
-    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path, log_file)
-
-    cameras, images, filtered_points3D = COLMAP_RERUN(workspace_path, log_file)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=True)
+    
+    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    
+    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    
+    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    
     write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     MVS(workspace_path, log_file)
@@ -184,18 +190,17 @@ def main()->None:
     
     
     resize_factor = 1.0
-    segments = 10
+    segments = 25
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
         #'crop': 0.8,
     }
-    #total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    total_elapsed_time = run_colmap_process(video_path, segments, image_options)
     
     
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=293.20)#total_elapsed_time)
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
 
-    
 
 if __name__ == '__main__':
     video_path = r"C:\\Users\\Reich\\Interface\\Videos\\Food_Recordings\\Zimtschnecke\\Phone\\Zimtschnecke_Phone_Orbit2.mp4"

@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 import shutil
 import ffmpeg  # Ensure this is from the ffmpeg-python library
 import pandas as pd
+from utils import image_enhancement as ie
+from utils import CLAHE as clahe
+
+
 
 def get_IMG_from_Video(video_path, output_folder, subset_folder:bool=False):
     video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -236,20 +240,60 @@ def copy_selected_images(selected_indices, src_folder, dest_folder, image_option
                 img = cv2.resize(img, None, fx=resize_factor, fy=resize_factor)
 
         # Save the modified image
-        cv2.imwrite(os.path.join(dest_folder, all_files[idx]), img)
+        cv2.imwrite(os.path.join(dest_folder, f"{idx:04d}.jpg"), img)
 
+def enhance_img(input_folder, destination_folder, method=None, image_options=None):
+    """
+    Enhance images in a folder using a specified method and save them to a destination folder.
+
+    Parameters:
+        input_folder (str): Path to the folder containing input images.
+        destination_folder (str): Path to the folder to save enhanced images.
+        method (str, optional): Enhancement method to apply (e.g., 'clahe', 'stretching', 'gamma_correction', 'histogram_equalization').
+                                If None, no enhancement is applied.
+        image_options (dict, optional): Additional options for the enhancement method.
+    """
+    from utils.image_enhancement import histogram_equalization, gamma_correction, contrast_stretching, adaptive_histogram_equalization
+    from utils.CLAHE import apply_clahe
+
+    if not os.path.exists(destination_folder):
+        os.makedirs(destination_folder)
+
+    for file in os.listdir(input_folder):
+        if file.endswith(('.jpg', '.png')):
+            img_path = os.path.join(input_folder, file)
+            img = cv2.imread(img_path)
+
+            # Apply the specified enhancement method if provided
+            if method == 'clahe':
+                img = apply_clahe(img_path)
+            elif method == 'stretching':
+                img = contrast_stretching(img)
+            elif method == 'gamma_correction':
+                img = gamma_correction(img)
+            elif method == 'histogram_equalization':
+                img = histogram_equalization(img)
+            elif method == 'adaptive_histogram_equalization':
+                img = adaptive_histogram_equalization(img)
+            elif method is None:
+                pass  # No enhancement applied
+            else:
+                raise ValueError(f"Unsupported enhancement method: {method}")
+
+            # Save the (possibly enhanced) image
+            cv2.imwrite(os.path.join(destination_folder, file), img)
 
 def main():
 
-    input_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit3.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
-    segments = 100  # or segments = 0.1
+    input_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
+    segments = 10  # or segments = 0.1
     image_options = {
         # 'reduce_size': 0.5,
         # 'square_crop': True,
         # 'crop' : .8,
     }
 
-    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\Phone\Mandarin_Orbit3_6"
+    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2"
     os.makedirs(base_dir, exist_ok=True)
     raw_images_path = os.path.join(base_dir, 'raw_images')
     os.makedirs(raw_images_path, exist_ok=True)
@@ -258,7 +302,7 @@ def main():
     get_IMG_from_Video(input_path, raw_images_path)
     
     sharpness_values = get_image_sharpness(raw_images_path, image_options)
-    selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
+    selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50, input_path=base_dir)
     copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
 
 
@@ -266,3 +310,4 @@ def main():
 if __name__ == "__main__":
     main()
     # plt.show()
+    #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
