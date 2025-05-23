@@ -9,35 +9,6 @@ from utils import image_enhancement as ie
 from utils import CLAHE as clahe
 
 
-
-def get_IMG_from_Video(video_path, output_folder, subset_folder:bool=False):
-    video_name = os.path.splitext(os.path.basename(video_path))[0]
-    
-    # Create a directory for the video
-    if subset_folder:
-        video_output_folder = os.path.join(output_folder, video_name)
-        os.makedirs(video_output_folder, exist_ok=True)
-    else:
-        video_output_folder = output_folder
-    
-    # Capture the video
-    cap = cv2.VideoCapture(video_path)
-    frame_count = 0
-    
-    # Extract frames
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_filename = f"{video_name}_frame_{frame_count:04d}.jpg"
-        cv2.imwrite(os.path.join(video_output_folder, frame_filename), frame)
-        frame_count += 1
-    
-    # Release the video capture object
-    cap.release()
-    
-    print("Frames extracted successfully from the video!")
-
 def extract_images_from_video(input_video, output_path, skip_frames=0):
     """Extract images from a video."""
     
@@ -53,7 +24,7 @@ def extract_images_from_video(input_video, output_path, skip_frames=0):
         stream = ffmpeg.filter(stream, "select", f"not(mod(n,{skip_frames}))")
         stream = ffmpeg.filter(stream, "setpts", "N/FRAME_RATE/TB")
         
-    output_pattern = os.path.join(output_path, f"{new_file_name_stub}_%04d.jpg")
+    output_pattern = os.path.join(output_path, f"%05d.jpg")
     
     try:
         ffmpeg.output(stream, output_pattern, qscale=3).run()
@@ -299,7 +270,7 @@ def main():
     os.makedirs(raw_images_path, exist_ok=True)
     sharp_image_path = os.path.join(base_dir, 'sharp_images')
     os.makedirs(sharp_image_path, exist_ok=True)
-    get_IMG_from_Video(input_path, raw_images_path)
+    extract_images_from_video(input_path, raw_images_path)
     
     sharpness_values = get_image_sharpness(raw_images_path, image_options)
     selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50, input_path=base_dir)
@@ -308,6 +279,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    #main()
     # plt.show()
     #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
+    video_path=r"C:\Users\Reich\Interface\Videos\Package_Recordings\Tee\Tee_Orbit2_5sek.mp4"
+    extract_images_from_video(video_path, r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2", skip_frames=0)
