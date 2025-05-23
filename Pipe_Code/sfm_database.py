@@ -3,6 +3,8 @@ import sqlite3
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
+from read_write_model import read_model, read_points3D_binary
+from pathlib import Path
 
 # Creates and manages the database of the colmap/glomap Pipeline
 # TODO: add reference tables from the database.db (cameras,image,features,pose_prior etc.) --> are they nessessary?
@@ -29,9 +31,12 @@ def setup_database(database_path: str) -> str:
             resize_factor REAL,
             fraction_of_images REAL,
             Observations INTEGER,
+            sparse_points INTEGER,
+            dense_points INTEGER,
             mean_repo_error REAL,
             mean_track_length REAL,
             mean_observations_per_image REAL,
+            registered_images INTEGER,
             elapsed_time REAL,
             Trial_date TEXT DEFAULT (DATETIME('now', 'localtime')),
             MOS INTEGER CHECK (MOS >= 1 AND MOS <= 10),
@@ -51,7 +56,7 @@ def setup_database(database_path: str) -> str:
         
     return database_path
 
-def load_existing_experiments(database_path: str, folder_path: str, experiment_description: str, **kwargs) -> None:
+def insert_experiment2db(database_path: str, folder_path: str, experiment_description: str, **kwargs) -> None:
     
     if not database_path.endswith('.db') or not any(fname.endswith('.db') for fname in os.listdir(os.path.dirname(database_path))):
         database_path = setup_database(database_path)
@@ -82,12 +87,16 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
     for line in output_lines:
         if 'Observations' in line:
             observations = int(line.split(':')[-1].strip())
+        elif 'Points' in line:
+            points = int(line.split(':')[-1].strip())
         elif 'Mean track length' in line:
             mean_track_length = float(line.split(':')[-1].strip())
         elif 'Mean observations per image' in line:
             mean_observations_per_image = float(line.split(':')[-1].strip())
         elif 'Mean reprojection error' in line:
             mean_reprojection_error = float(line.split(':')[-1].strip().replace('px', ''))
+        elif 'Registered images' in line:
+            registered_images = int(line.split(':')[-1].strip())
 
     for key, value in kwargs.items():
         if key == 'resize_factor':
@@ -97,16 +106,23 @@ def load_existing_experiments(database_path: str, folder_path: str, experiment_d
         elif key == 'elapsed_time':
             elapsed_time = value
 
+    dense_path = Path(folder_path) / 'dense' 
+    dense_points= read_points3D_binary((dense_path / "points3D").with_suffix('.bin'))
+    dense_points = len(dense_points)
+
     branch = get_git_branch()
     commit_hash = get_git_commit()
     mos = None  # Assuming MOS is not provided in kwargs
 
     # Insert data into the database
+    # Make folder_path relative to its parent (one level)
+    relative_folder_path = os.path.basename(folder_path.rstrip(os.sep))
+
     cursor.execute('''
-        INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, mean_repo_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, MOS, branch, commit_hash, folder_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (experiment_description, project_ini, cameras_path, images_path, points3D_path, observations, mean_reprojection_error, mean_track_length, mean_observations_per_image, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash, folder_path))
-    
+        INSERT INTO Trial (experiment_description, project_ini, cameras, image, Points3D, Observations, sparse_points, dense_points, mean_repo_error, mean_track_length, mean_observations_per_image, registered_images, resize_factor, fraction_of_images, elapsed_time, MOS, branch, commit_hash, folder_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (experiment_description, project_ini, cameras_path, images_path, points3D_path, observations, points, dense_points, mean_reprojection_error, mean_track_length, mean_observations_per_image, registered_images, resize_factor, fraction_of_images, elapsed_time, mos, branch, commit_hash, relative_folder_path))
+
     # Commit the changes and close the connection
     conn.commit()
     conn.close()

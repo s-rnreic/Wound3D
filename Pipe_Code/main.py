@@ -158,7 +158,7 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
         for header, param, value in custom_parameters:
             ctpi.insert_keywords_to_project_ini(ini_path, header, param, value)
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=True)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=False)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -184,8 +184,8 @@ def main()->None:
     
     if TEST:
         video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Zimtschnecke\Phone\Zimtschnecke_Phone_Orbit2.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_SIFT"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_SIFT'
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\t1"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
         experiment_description = ' Reco Zimtschnecke_Phone_Orbit2, Poco X3, 25 images of two orbital drive, '
     
     
@@ -196,57 +196,59 @@ def main()->None:
         #'square_crop': True,
         #'crop': 0.8,
     }
-    total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    #total_elapsed_time = run_colmap_process(video_path, segments, image_options)
     
-    
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
+    sfm_database.insert_experiment2db(trial_database_path, workspace_path, experiment_description='experiment_description', resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=50)
+
+    #sfm_database.insert_experiment2db(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
 
 
 if __name__ == '__main__':
-    video_path = r"C:\\Users\\Reich\\Interface\\Videos\\Food_Recordings\\Zimtschnecke\\Phone\\Zimtschnecke_Phone_Orbit2.mp4"
-    base_workspace_path = r"C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\Experiments_SIFT"
-    trial_database_path = r'C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\Experiments_SIFT'
+    # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Orbits_Tee_Roll"
+    video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
+    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Orbits_Tee_Roll'
+    resize_factor = [1.0]  # You can adjust or make this a list if needed
+    segments = [30]        # You can adjust or make this a list if needed
+    
+     #trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Resolution'
 
-    resize_factor = 1.0
-    segments = 10
-    image_options = {
-        'reduce_size': resize_factor,
-    }
+    # resize_factor =[0.8, 1.0]
+    # segments = [10, 20, 30, 40, 50, 100]
 
-    parameter_ranges = [
-        ('SiftExtraction', 'num_octaves', [2, 5, 10]),
-        ('SiftExtraction', 'octave_resolution', [1, 5, 10]),
-        ('SiftExtraction', 'max_num_orientations', [1, 2, 3]),
-        ('SiftExtraction', 'peak_threshold', [0.003, 0.0066666666666666671, 0.008]),
-        ('SiftExtraction', 'edge_threshold', [5, 10, 20]),
-        ('SiftMatching', 'max_ratio', [0.7, 0.8, 0.9]),
-        ('SiftMatching', 'max_distance', [0.5, 0.7, 1.1])
-    ]
+    # parameter_ranges = [
+    #     ('SiftExtraction', 'num_octaves', [2, 5, 10]),
+    #     ('SiftExtraction', 'octave_resolution', [1, 5, 10]),
+    #     ('SiftExtraction', 'max_num_orientations', [1, 2, 3]),
+    #     ('SiftExtraction', 'peak_threshold', [0.003, 0.0066666666666666671, 0.008]),
+    #     ('SiftExtraction', 'edge_threshold', [5, 10, 20]),
+    #     ('SiftMatching', 'max_ratio', [0.7, 0.8, 0.9]),
+    #     ('SiftMatching', 'max_distance', [0.5, 0.7, 1.1])
+    # ]
 
-    trial_number = 500
+    
+    
+    from glob import glob
+    import os
 
-    # Generate all combinations of parameters
-    parameter_combinations = list(product(*[[(header, param, value) for value in values] for header, param, values in parameter_ranges]))
-
-    for combination in parameter_combinations:
-            workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
-            experiment_description = "Reco Zimtschnecke_Phone_Orbit2, Poco X3, 25 images of two orbital drive, Experiment with " + \
-                                ", ".join([f"{header} -> {param} = {value}" for header, param, value in combination])
-
-            custom_parameters = [(header, param, str(value)) for header, param, value in combination]
-
-            # Execute the COLMAP process with the updated parameters
-            total_elapsed_time = run_colmap_process(video_path, segments, image_options, custom_parameters)
-            print(f"Completed run with {', '.join([f'{header} -> {param} = {value}' for header, param, value in combination])}, Total elapsed time: {total_elapsed_time:.2f} seconds")
-
-            # Log the experiment in the database
-            sfm_database.load_existing_experiments(
-                trial_database_path,
-                workspace_path,
-                experiment_description=experiment_description,
-                resize_factor=resize_factor,
-                fraction_of_images=segments,
-                elapsed_time=total_elapsed_time
-            )
-
-            trial_number += 1
+    video_files = glob(os.path.join(video_dir, '*.mp4'))
+    trial_number = 8
+    for video_path in video_files:
+        for rf in resize_factor:
+            for seg in segments:
+                workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
+                experiment_description = f"Reco {os.path.basename(video_path)}, {seg} images, Experiment with resize_factor = {rf}, segments = {seg}"
+                image_options = {
+                    'reduce_size': rf,
+                }
+                total_elapsed_time = run_colmap_process(video_path, seg, image_options, enhance_option=None)#'histogram_equalization'
+                print(f"Completed run with resize_factor = {rf}, segments = {seg}, Total elapsed time: {total_elapsed_time:.2f} seconds")
+                sfm_database.insert_experiment2db(
+                    trial_database_path,
+                    workspace_path,
+                    experiment_description=experiment_description,
+                    resize_factor=rf,
+                    fraction_of_images=seg,
+                    elapsed_time=total_elapsed_time
+                )
+                trial_number += 1
