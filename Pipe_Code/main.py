@@ -158,7 +158,7 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
         for header, param, value in custom_parameters:
             ctpi.insert_keywords_to_project_ini(ini_path, header, param, value)
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=False)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options,enhance_option ,Masking=True)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -209,44 +209,5 @@ if __name__ == '__main__':
     resize_factor = [1.0]  # You can adjust or make this a list if needed
     segments = [30]        # You can adjust or make this a list if needed
     main()
-     #trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Resolution'
-
-    # resize_factor =[0.8, 1.0]
-    # segments = [10, 20, 30, 40, 50, 100]
-
-    # parameter_ranges = [
-    #     ('SiftExtraction', 'num_octaves', [2, 5, 10]),
-    #     ('SiftExtraction', 'octave_resolution', [1, 5, 10]),
-    #     ('SiftExtraction', 'max_num_orientations', [1, 2, 3]),
-    #     ('SiftExtraction', 'peak_threshold', [0.003, 0.0066666666666666671, 0.008]),
-    #     ('SiftExtraction', 'edge_threshold', [5, 10, 20]),
-    #     ('SiftMatching', 'max_ratio', [0.7, 0.8, 0.9]),
-    #     ('SiftMatching', 'max_distance', [0.5, 0.7, 1.1])
-    # ]
-
     
     
-    from glob import glob
-    import os
-
-    # video_files = glob(os.path.join(video_dir, '*.mp4'))
-    # trial_number = 8
-    # for video_path in video_files:
-    #     for rf in resize_factor:
-    #         for seg in segments:
-    #             workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
-    #             experiment_description = f"Reco {os.path.basename(video_path)}, {seg} images, Experiment with resize_factor = {rf}, segments = {seg}"
-    #             image_options = {
-    #                 'reduce_size': rf,
-    #             }
-    #             total_elapsed_time = run_colmap_process(video_path, seg, image_options, enhance_option=None)#'histogram_equalization'
-    #             print(f"Completed run with resize_factor = {rf}, segments = {seg}, Total elapsed time: {total_elapsed_time:.2f} seconds")
-    #             sfm_database.insert_experiment2db(
-    #                 trial_database_path,
-    #                 workspace_path,
-    #                 experiment_description=experiment_description,
-    #                 resize_factor=rf,
-    #                 fraction_of_images=seg,
-    #                 elapsed_time=total_elapsed_time
-    #             )
-    #             trial_number += 1
