@@ -64,7 +64,8 @@ def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segment
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
     if Masking:
-        masking.process_folder(sharp_image_path, image_mask_path)
+        result=masking.process_video_with_sam2(raw_images_path, interactive=True)
+        masking.save_masks(result, image_mask_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
@@ -151,7 +152,7 @@ def run_colmap_process(video_path, segments, image_options):
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, Masking=True)
     
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -175,23 +176,23 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit1.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1\Phone\Mandarin_Orbit1_2"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Peach\Mandarine1'
+        video_path = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Tee\Tee_ZyOrbit1.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T1"
+        trial_database_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test"
         experiment_description = ' Reco Mandarin_Phone_Orbit1_2, Poco X3, 10 images of one orbital drive, Masking via thresholdig in HSV, second Trial. Activated DSP and maxed the max number of matches/keypoints etc.'
     
     
     resize_factor = 1.0
-    segments = 10
+    segments = 20
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
         #'crop': 0.8,
     }
-    #total_elapsed_time = run_colmap_process(video_path, segments, image_options)
+    total_elapsed_time = run_colmap_process(video_path, segments, image_options)
     
     
-    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=293.20)#total_elapsed_time)
+    sfm_database.load_existing_experiments(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
 
     
 
