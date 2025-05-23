@@ -9,7 +9,19 @@ It provides a structured workflow for key steps such as feature extraction, matc
 
 1. **Video Analysis/Processing**
     - `Pipe_Code\prepare_vid_for_colmap_v5.py`: Decomposes video into images and selects images based on sharpness and equidistance.
-    - `Pipe_Code\build_masks.py`: Automatically creates masks using thresholding in LAB-colorscale.
+    - `Pipe_Code\build_masks.py`: Provides automatic mask creation for wound segmentation. It includes:
+        - `process_image_with_sam2`  and `process_video_with_sam2`: offer the SAM2 utils and extract Masks from Images or Videos
+        - `process_video_with_sam2` has the bool `interactive` with which an initial point/points can be choosen in an image to create a masking object which is getting tracked
+
+    **SAM2 Installation:**  
+    To use the SAM2-based segmentation, install the Segment Anything Model (SAM2) by followng the instructions from [SAM2 GitHub repository](https://github.com/facebookresearch/sam2?tab=readme-ov-file):
+        - Make sure to Download the checkpoints and place them into the corresponding folder
+        - Install the required Packages and check for the right Torch to CUDA Version --> The Packages for SAM2 can be installed via 
+        `pip install -e .`
+    ```bash
+    git submodule update --init --recursive
+    ```
+    Refer to the [SAM2 GitHub repository](https://github.com/facebookresearch/sam2?tab=readme-ov-file) for additional setup instructions.
 
 
 2. **COLMAP/SFM Pipeline**
