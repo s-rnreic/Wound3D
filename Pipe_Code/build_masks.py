@@ -93,9 +93,17 @@ def process_image_with_sam2(image_path, checkpoint, model_cfg,  multimask_output
 
     return masks
 
-def process_video_with_sam2(image_folder_path, checkpoint, model_cfg, input_points=None, interactive=False):
-    from PIL import Image
+def process_video_with_sam2(image_folder_path, checkpoint=None, model_cfg=None, input_points=None, interactive=False):
     from sam2.build_sam import build_sam2_video_predictor
+    # Set default paths relative to this script's location
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if checkpoint is None:
+        checkpoint = os.path.join(script_dir, '..', 'external', 'sam2', 'checkpoints', 'sam2.1_hiera_base_plus.pt')
+    if model_cfg is None:
+        model_cfg = os.path.join(script_dir, '..', 'external', 'sam2', 'sam2', 'configs', 'sam2.1', 'sam2.1_hiera_b+.yaml')
+    checkpoint = os.path.abspath(checkpoint)
+    model_cfg = os.path.abspath(model_cfg)
+    
     if torch.cuda.is_available():
         device = torch.device("cuda")
         if device.type == "cuda":
@@ -151,8 +159,15 @@ def process_video_with_sam2(image_folder_path, checkpoint, model_cfg, input_poin
     
     return video_segments
  
-
-
+def save_masks(result, output_path):
+    os.makedirs(output_path, exist_ok=True)
+    for frame_idx, obj_masks in result.items():
+        for obj_id, mask in obj_masks.items():
+            mask_img = (mask.squeeze() * 255).astype(np.uint8)
+            out_filename = f"{frame_idx:04d}.png"
+            out_filepath = os.path.join(output_path, out_filename)
+            cv2.imwrite(out_filepath, mask_img)
+            
 if __name__ == '__main__':
     # Your multiprocessing code here
     # Example usage
@@ -165,12 +180,5 @@ if __name__ == '__main__':
 
     
     result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=True)
-    
+
     # Save all masks in result to output_path
-    os.makedirs(output_path, exist_ok=True)
-    for frame_idx, obj_masks in result.items():
-        for obj_id, mask in obj_masks.items():
-            mask_img = (mask.squeeze() * 255).astype(np.uint8)
-            out_filename = f"{frame_idx:04d}.png"
-            out_filepath = os.path.join(output_path, out_filename)
-            cv2.imwrite(out_filepath, mask_img)
