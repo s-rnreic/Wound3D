@@ -174,11 +174,34 @@ if __name__ == '__main__':
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\t1\raw_images"
-    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\t1\masks"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2"
+    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2\masks"
     
 
     
     result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=True)
-
+    for frame_idx, obj_masks in result.items():
+        img_path_jpg = os.path.join(img_folder_path, f"{frame_idx:05d}.jpg")
+        img_path_png = os.path.join(img_folder_path, f"{frame_idx:05d}.png")
+        print(img_path_jpg)
+        if os.path.exists(img_path_jpg):
+            img_path = img_path_jpg
+        elif os.path.exists(img_path_png):
+            img_path = img_path_png
+        else:
+            print(f"Warning: No image found for frame {frame_idx} (tried .jpg and .png)")
+            continue
+        img = cv2.imread(img_path)
+        if img is None:
+            print(f"Warning: Failed to load image at {img_path}")
+            continue
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        for obj_id, mask in obj_masks.items():
+            mask_bool = mask.squeeze().astype(bool)
+            masked_img = np.zeros_like(img_rgb)
+            masked_img[mask_bool] = img_rgb[mask_bool]
+            plt.imshow(masked_img)
+            plt.title(f"Frame {frame_idx}, Object {obj_id}")
+            plt.axis("off")
+            plt.show()
     # Save all masks in result to output_path

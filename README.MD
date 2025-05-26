@@ -15,7 +15,7 @@ It provides a structured workflow for key steps such as feature extraction, matc
 
     **SAM2 Installation:**  
     To use the SAM2-based segmentation, install the Segment Anything Model (SAM2) by followng the instructions from [SAM2 GitHub repository](https://github.com/facebookresearch/sam2?tab=readme-ov-file):
-        - Make sure to Download the checkpoints and place them into the corresponding folder
+        - Make sure to download the checkpoints and place them into the corresponding folder
         - Install the required Packages and check for the right Torch to CUDA Version --> The Packages for SAM2 can be installed via 
         `pip install -e .`
     ```bash

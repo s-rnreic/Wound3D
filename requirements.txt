@@ -6,6 +6,8 @@ rerun-sdk
 requests
 pandas
 ffmpeg
+ffmpeg-python
 trimesh
+scikit-image
 torch>=2.5.1
 torchvision>=0.20.1
