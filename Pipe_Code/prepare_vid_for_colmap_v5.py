@@ -32,14 +32,9 @@ def extract_images_from_video(input_video, output_path, skip_frames=0):
         print(e.stderr)
 
 
-def get_image_sharpness(input_folder, image_options=None, percentage_to_analyze=1):
-    """Calculate sharpness for images in a folder and return as a DataFrame."""
-
+def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None, percentage_to_analyze=1):
+    """Calculate sharpness for images in a folder and return as a DataFrame. If mask_folder_path is given, only calculate sharpness in masked area for each image using corresponding mask."""
     csv_path = os.path.join(input_folder, 'sharpness.csv')
-
-    # Check if the CSV exists and use_csv is True, then load and return the DataFrame
-    # if use_csv and os.path.exists(csv_path):
-    #     return pd.read_csv(csv_path, header=None, names=['Sharpness'])
 
     # List image files in the input folder
     image_files = [f for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
@@ -49,7 +44,8 @@ def get_image_sharpness(input_folder, image_options=None, percentage_to_analyze=
     sharpness_values = []
 
     for idx in selected_indices:
-        img = cv2.imread(os.path.join(input_folder, image_files[idx]))
+        img_name = image_files[idx]
+        img = cv2.imread(os.path.join(input_folder, img_name))
 
         # Apply image options if provided
         if image_options:
@@ -60,7 +56,7 @@ def get_image_sharpness(input_folder, image_options=None, percentage_to_analyze=
             if image_options.get('square_crop', False):
                 h, w = img.shape[:2]
                 min_dim = min(h, w)
-                img = img[0:min_dim, int((w - min_dim) / 2):int((w + min_dim) / 2)]  # Crop to square and middle part of width
+                img = img[0:min_dim, int((w - min_dim) / 2):int((w + min_dim) / 2)]
 
             if 'crop' in image_options:
                 crop_factor = image_options['crop']
@@ -71,13 +67,36 @@ def get_image_sharpness(input_folder, image_options=None, percentage_to_analyze=
                 crop_end_w = int(w - w * (1 - crop_factor) / 2)
                 img = img[crop_start_h:crop_end_h, crop_start_w:crop_end_w]
 
-
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+        # If mask_folder_path is given, load the corresponding mask for this image
+        if mask_folder_path is not None:
+            # Mask file is named like 0001.jpg.png for image 0001.jpg
+            mask_name = img_name + '.png'
+            mask_path = os.path.join(mask_folder_path, mask_name)
+            if os.path.exists(mask_path):
+                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                if mask is not None:
+                    if mask.shape != gray.shape:
+                        mask = cv2.resize(mask.astype(np.uint8), (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    mask_bool = mask > 0
+                    masked_gray = np.where(mask_bool, gray, 0)
+                    plt.imshow(masked_gray, cmap='gray')
+                    plt.title(f"Masked Gray Image for {img_name}")
+                    plt.axis('off')
+                    plt.show()
+                    laplacian = cv2.Laplacian(masked_gray, cv2.CV_64F)
+                    variance = laplacian[mask_bool].var() if np.any(mask_bool) else 0
+                else:
+                    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+            else:
+                variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+        else:
+            variance = cv2.Laplacian(gray, cv2.CV_64F).var()
         sharpness_values.append(variance)
 
     # Normalize sharpness values
-    sharpness_values = np.array(sharpness_values) / np.max(sharpness_values)
+    sharpness_values = np.array(sharpness_values) / np.max(sharpness_values) if len(sharpness_values) > 0 and np.max(sharpness_values) > 0 else np.array(sharpness_values)
     
     # Convert the list of sharpness values into a DataFrame
     sharpness_df = pd.DataFrame(sharpness_values, columns=['Sharpness'])
