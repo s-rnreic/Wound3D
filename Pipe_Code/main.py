@@ -53,20 +53,24 @@ def create_workspace(workspace_path:str)->None:
     sharp_image_path = os.path.join(workspace_path, 'sharp_images')
     os.makedirs(sharp_image_path, exist_ok=True)
     image_mask_path=os.path.join(workspace_path, 'masks')
+    
 
 
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, image_output_path:str, log_file:str, segments:float, image_options:dict, enhance_option:str=None , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=50.0, enhance_option:str=None , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.extract_images_from_video(input_path, raw_images_path)
-    if Masking:
-        masking.process_folder(raw_images_path, image_mask_path)
-    sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path,mask_folder_path=image_mask_path, image_options=image_options)
-    selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50)
+    
+    sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path,mask_folder_path=None, image_options=image_options)
+    selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=min_sharpness_percentile, input_path=workspace_path)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
+    if Masking:
+        masking.process_folder(sharp_image_path, image_mask_path)
+    
     if enhance_option is not None:
         prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
+    
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
@@ -94,18 +98,21 @@ def COLMAP_Pipeline(image_output_path: str, workspace_path: str, image_mask_path
     feature_matching_command = f"colmap exhaustive_matcher --project_path \"{temp_ini_path}\""
     run_command(feature_matching_command)
     ctpi.append_to_total_project_ini(temp_ini_path, total_ini_path)
-    
-    
-    #Mapping
-    sparse_path = os.path.join(workspace_path, 'sparse')
-    os.makedirs(sparse_path, exist_ok=True)
-    global_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
-    ctgi.create_glomap_ini(global_ini_path)
-    #open_ini_in_editor(workspace_path + '\\glomap_config.ini')
-    ctgi.execute_glomap(global_ini_path, database_path, sparse_path, sharp_image_path)
-    ctpi.append_to_total_project_ini(global_ini_path, total_ini_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_Pipeline", elapsed_time)
+    
+
+def GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file: str):
+    start_time = time.time()
+    total_ini_path = os.path.join(workspace_path, 'total_project.ini')
+    
+    #open_ini_in_editor(workspace_path + '\\glomap_config.ini')
+    ctgi.execute_glomap(glomap_ini_path, database_path, sparse_path, sharp_image_path)
+    ctpi.append_to_total_project_ini(glomap_ini_path, total_ini_path)
+
+    elapsed_time = time.time() - start_time
+    log_time(log_file, "GLOMAP_Pipeline", elapsed_time)
+
 
     
     # #3. COLMAP RERUN Streaming
@@ -145,27 +152,38 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None)->float:
-    global ini_path, database_path
+def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None, sharpness_value=50.0)->float:
+    global ini_path, database_path , sparse_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
     create_workspace(workspace_path)
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
     #open_ini_in_editor(ini_path)
     
-    if custom_parameters:
-        for header, param, value in custom_parameters:
-            ctpi.insert_keywords_to_project_ini(ini_path, header, param, value)
+    # if custom_parameters:
+    #     for header, param, value in custom_parameters:
+    #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, enhance_option , Masking=True)
-    
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True)
+
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
+    sparse_path = os.path.join(workspace_path, 'sparse')
+    os.makedirs(sparse_path, exist_ok=True)
+    glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
+    ctgi.create_glomap_ini(glomap_ini_path)
+
+    if custom_parameters:
+        for header, param, value in custom_parameters:
+            ctpi.insert_keywords_to_project_ini(glomap_ini_path, header, param, str(value))
+
+    GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
+
     ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
     cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
-    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    #write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
     MVS(workspace_path, log_file)
     
@@ -182,14 +200,14 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit2.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\t1"
-        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
-        experiment_description = 'Test'
+        video_path = r"C:\Users\Reich\Interface\Videos\Package_Recordings\old_Roll\Roll_Orbit3.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\local_sharp"
+        trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Mask_Sparse_Dense'
+        experiment_description = 'Reco Mandarin Orbit2, 1.0 resize factor, segments = 40, sharpness is calculated for whole image. Masks are applied only for Dense Reconstruction'
     
     
     resize_factor = 1.0
-    segments = 25
+    segments = 70
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
@@ -197,56 +215,47 @@ def main()->None:
     }
     total_elapsed_time = run_colmap_process(video_path, segments, image_options)
 
-    # sfm_database.insert_experiment2db(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
+    #sfm_database.insert_experiment2db(trial_database_path, workspace_path, experiment_description=experiment_description, resize_factor=resize_factor, fraction_of_images=segments, elapsed_time=total_elapsed_time)
 
 
 if __name__ == '__main__':
     # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
-    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Orbits_Tee_Roll"
-    video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
-    video_path = r"C:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit2.mp4"
-    trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Orbits_Tee_Roll'
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Hand"
+    #video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
+    video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Hand\Hand1.mp4"
+    trial_database_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
-    segments = [30]        # You can adjust or make this a list if needed
-    main()
-     #trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Resolution'
-
-    # resize_factor =[0.8, 1.0]
-    # segments = [10, 20, 30, 40, 50, 100]
-
-    # parameter_ranges = [
-    #     ('SiftExtraction', 'num_octaves', [2, 5, 10]),
-    #     ('SiftExtraction', 'octave_resolution', [1, 5, 10]),
-    #     ('SiftExtraction', 'max_num_orientations', [1, 2, 3]),
-    #     ('SiftExtraction', 'peak_threshold', [0.003, 0.0066666666666666671, 0.008]),
-    #     ('SiftExtraction', 'edge_threshold', [5, 10, 20]),
-    #     ('SiftMatching', 'max_ratio', [0.7, 0.8, 0.9]),
-    #     ('SiftMatching', 'max_distance', [0.5, 0.7, 1.1])
+    segments = [30,50,70,90]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
+    # custom_parameters = [
+    #     ('GLOMAP', 'RelPoseEstimation.max_epipolar_error', [2,4,10,20])
     # ]
-
-    
-    
+    #main()
+   
     from glob import glob
     import os
-
-    # video_files = glob(os.path.join(video_dir, '*.mp4'))
-    # trial_number = 8
-    # for video_path in video_files:
-    #     for rf in resize_factor:
-    #         for seg in segments:
-    #             workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
-    #             experiment_description = f"Reco {os.path.basename(video_path)}, {seg} images, Experiment with resize_factor = {rf}, segments = {seg}"
-    #             image_options = {
-    #                 'reduce_size': rf,
-    #             }
-    #             total_elapsed_time = run_colmap_process(video_path, seg, image_options, enhance_option=None)#'histogram_equalization'
-    #             print(f"Completed run with resize_factor = {rf}, segments = {seg}, Total elapsed time: {total_elapsed_time:.2f} seconds")
-    #             sfm_database.insert_experiment2db(
-    #                 trial_database_path,
-    #                 workspace_path,
-    #                 experiment_description=experiment_description,
-    #                 resize_factor=rf,
-    #                 fraction_of_images=seg,
-    #                 elapsed_time=total_elapsed_time
-    #             )
-    #             trial_number += 1
+    from itertools import product  # Add import for product
+    trial_number = 1
+    for rf in resize_factor:
+        for seg in segments:
+                # For each value in custom_parameters, generate all combinations
+                # param_combinations = []
+                # for header, param, values in custom_parameters:
+                #     for value in values:
+                #         param_combinations.append([(header, param, value)])
+                #for param_set in param_combinations:
+            workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
+            experiment_description = f"Reco Fuß, {seg} images, Experiment with resize_factor = {rf}, segments = {seg}, sharpness is calculated for the whole image"
+            image_options = {
+                'reduce_size': rf,
+            }
+            total_elapsed_time = run_colmap_process(video_path, seg, image_options, enhance_option=None)
+            print(f"Completed run with resize_factor = {rf}, segments = {seg}, Total elapsed time: {total_elapsed_time:.2f} seconds")
+            sfm_database.insert_experiment2db(
+                trial_database_path,
+                workspace_path,
+                experiment_description=experiment_description,
+                resize_factor=rf,
+                fraction_of_images=seg,
+                elapsed_time=total_elapsed_time
+            )
+            trial_number += 1
