@@ -50,10 +50,12 @@ def insert_lines_at_beginning_of_ini_file(file_path: str, lines: list):
 
 def insert_keywords_to_project_ini(ini_path: str, keyword: str, parameter: str, value: str):
     config = configparser.ConfigParser()
+    config.optionxform = str  # preserve case for keys
     config.read(ini_path)
     
     if keyword not in config:
-        raise ValueError(f"Keyword [{keyword}] not found in the ini file.")
+        print(f"Keyword [{keyword}] not found in the ini file. No changes made.")
+        return ini_path
     
     config[keyword][parameter] = value
     
