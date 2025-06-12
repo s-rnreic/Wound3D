@@ -10,7 +10,10 @@ from utils import CLAHE as clahe
 
 
 def extract_images_from_video(input_video, output_path, skip_frames=0):
-    """Extract images from a video."""
+    """
+        Extract images from a video. The Video is given by an input_path and all images are extracted into the output_path.
+        All Images are named after "%05d.jpg" style (ex. 00001.jpg). 
+    """
     
     if os.path.exists(output_path):
         shutil.rmtree(output_path)
@@ -33,7 +36,11 @@ def extract_images_from_video(input_video, output_path, skip_frames=0):
 
 
 def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None, percentage_to_analyze=1):
-    """Calculate sharpness for images in a folder and return as a DataFrame. If mask_folder_path is given, only calculate sharpness in masked area for each image using corresponding mask."""
+    """
+    Calculate sharpness for images in a folder and return as a DataFrame. If mask_folder_path is given, only calculate sharpness in masked area for each image using corresponding mask.
+    The Sharpness is calculated by the use of the Laplacian Variance and either calculated for the area inside the mask or the whole area. 
+    """
+    
     csv_path = os.path.join(input_folder, 'sharpness.csv')
 
     # List image files in the input folder
@@ -42,7 +49,11 @@ def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None,
     selected_indices = np.linspace(0, len(image_files) - 1, subset_size).astype(int)
 
     sharpness_values = []
-
+    if mask_folder_path is not None:
+        print(f"Using masks from: {mask_folder_path}")
+    else:
+        print("No mask folder provided, calculating sharpness for entire images.")
+        
     for idx in selected_indices:
         img_name = image_files[idx]
         img = cv2.imread(os.path.join(input_folder, img_name))
@@ -81,10 +92,6 @@ def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None,
                         mask = cv2.resize(mask.astype(np.uint8), (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
                     mask_bool = mask > 0
                     masked_gray = np.where(mask_bool, gray, 0)
-                    plt.imshow(masked_gray, cmap='gray')
-                    plt.title(f"Masked Gray Image for {img_name}")
-                    plt.axis('off')
-                    plt.show()
                     laplacian = cv2.Laplacian(masked_gray, cv2.CV_64F)
                     variance = laplacian[mask_bool].var() if np.any(mask_bool) else 0
                 else:
@@ -96,10 +103,10 @@ def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None,
         sharpness_values.append(variance)
 
     # Normalize sharpness values
-    sharpness_values = np.array(sharpness_values) / np.max(sharpness_values) if len(sharpness_values) > 0 and np.max(sharpness_values) > 0 else np.array(sharpness_values)
+    #sharpness_values = np.array(sharpness_values) / np.max(sharpness_values) if len(sharpness_values) > 0 and np.max(sharpness_values) > 0 else np.array(sharpness_values)
     
     # Convert the list of sharpness values into a DataFrame
-    sharpness_df = pd.DataFrame(sharpness_values, columns=['Sharpness'])
+    sharpness_df = pd.DataFrame(np.array(sharpness_values), columns=['Sharpness'])
     
     # Save the DataFrame to CSV if use_csv is True
     sharpness_df.to_csv(csv_path, index=False, header=False)
@@ -107,8 +114,12 @@ def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None,
     return sharpness_df
 
 
-def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, input_path=None):
-    """Select indices of sharpest images, ensuring they are nearly equidistant and above a sharpness threshold."""
+def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50.0, absolut_min=25, input_path=None):
+    """
+    Select indices of sharpest images, ensuring they are nearly equidistant and above a sharpness threshold.
+    "absolut_min": if the image-sharpness is below this value then a certain area around this image is not considered for image selection
+    
+    """
     
     # Convert percentage to a decimal if necessary
     if segments < 1:
@@ -125,6 +136,11 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
     
     # Calculate the minimum sharpness threshold
     min_sharpness = sharpness_df['Sharpness'].quantile(min_sharpness_percentile / 100.0)
+    if min_sharpness < absolut_min:
+        print("The Sharpness of the whole Dataset seems to be to low or to blurry to be reconstructed.")
+    
+    
+    
     
     selected_indices = []
     for segment in range(segments):
@@ -153,10 +169,10 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50, inp
                 pass
 
     if input_path is not None:
-        selected_image_path = os.path.join(input_path, f"Subset_{len(selected_indices)}/Images")
-        plot_sharpness_results(sharpness_df, selected_indices, min_sharpness, segments, selected_image_path)
+        plot_sharpness_results(sharpness_df, selected_indices, min_sharpness, segments, input_path)
 
     return selected_indices
+
 
 
 def plot_sharpness_results(sharpness_df, selected_indices, min_sharpness, num_blocks, input_path):
@@ -194,7 +210,7 @@ def plot_sharpness_results(sharpness_df, selected_indices, min_sharpness, num_bl
     # create the folder if it does not exist
     if not os.path.exists(input_path):
         os.makedirs(input_path)
-    plt.savefig(os.path.join(os.path.dirname(input_path), 'sharpness_plot.png'))
+    plt.savefig(os.path.join(input_path, 'sharpness_plot.png'))
 
 
 def copy_selected_images(selected_indices, src_folder, dest_folder, image_options=None):
@@ -230,7 +246,9 @@ def copy_selected_images(selected_indices, src_folder, dest_folder, image_option
                 img = cv2.resize(img, None, fx=resize_factor, fy=resize_factor)
 
         # Save the modified image
-        cv2.imwrite(os.path.join(dest_folder, f"{idx:04d}.jpg"), img)
+        cv2.imwrite(os.path.join(dest_folder, f"{idx:05d}.jpg"), img)
+
+
 
 def enhance_img(input_folder, destination_folder, method=None, image_options=None):
     """
@@ -273,33 +291,92 @@ def enhance_img(input_folder, destination_folder, method=None, image_options=Non
             # Save the (possibly enhanced) image
             cv2.imwrite(os.path.join(destination_folder, file), img)
 
+
+
+
 def main():
 
-    input_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"  # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
-    segments = 10  # or segments = 0.1
+    input_path = r"C:\Users\Reich\Interface\Videos\Package_Recordings\old_Roll\Roll_Orbit3.mp4" # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
+    segments = 50  # or segments = 0.1
     image_options = {
         # 'reduce_size': 0.5,
         # 'square_crop': True,
         # 'crop' : .8,
     }
-
-    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2"
-    os.makedirs(base_dir, exist_ok=True)
+    mask_folder_path=r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial1\masks"
+    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial1"
+    # os.makedirs(base_dir, exist_ok=True)
     raw_images_path = os.path.join(base_dir, 'raw_images')
-    os.makedirs(raw_images_path, exist_ok=True)
+    # os.makedirs(raw_images_path, exist_ok=True)
     sharp_image_path = os.path.join(base_dir, 'sharp_images')
-    os.makedirs(sharp_image_path, exist_ok=True)
-    extract_images_from_video(input_path, raw_images_path)
-    
-    sharpness_values = get_image_sharpness(raw_images_path, image_options)
-    selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50, input_path=base_dir)
-    copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
+    # os.makedirs(sharp_image_path, exist_ok=True)
+    #extract_images_from_video(input_path, raw_images_path)
+    # Store sharpness and selected indices for both cases
+    sharpness_results = {}
+    selected_indices_results = {}
+
+    for mask_option in [mask_folder_path, None]:
+        print(f"\n--- Calculating sharpness with mask_folder_path={mask_option} ---")
+        sharpness_values = get_image_sharpness(
+            raw_images_path,
+            mask_folder_path=mask_option,
+            image_options=image_options
+        )
+        sharpness_results[str(mask_option)] = sharpness_values
+        selected_indices = select_sharp_images(
+            sharpness_values,
+            segments,
+            min_sharpness_percentile=90,
+            input_path=None  # We'll plot manually below
+        )
+        selected_indices_results[str(mask_option)] = selected_indices
+
+    # Use sharpness values from the iteration without mask for the plot
+    sharpness_no_mask = sharpness_results["None"]['Sharpness'].values
+    indices_no_mask = selected_indices_results["None"]
+    indices_with_mask = selected_indices_results[str(mask_folder_path)]
+
+    # Save paired indices to a .txt file
+    indices_txt_path = os.path.join(base_dir, 'selected_indices_pairs.txt')
+    with open(indices_txt_path, 'w') as f:
+        for idx_no_mask, idx_with_mask in zip(indices_no_mask, indices_with_mask):
+            f.write(f"{idx_no_mask}\t{idx_with_mask}\n")
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(np.arange(len(sharpness_no_mask)), sharpness_no_mask, label='Sharpness (No Mask)', color='blue')
+    plt.scatter(indices_no_mask, sharpness_no_mask[indices_no_mask], color='green', label='Selected (No Mask)', zorder=5)
+    plt.scatter(indices_with_mask, sharpness_no_mask[indices_with_mask], color='red', label='Selected (With Mask)', marker='x', zorder=6)
+    plt.xlabel('Image Index')
+    plt.ylabel('Sharpness')
+    plt.title('Sharpness and Selected Indices (With/Without Mask)')
+    plt.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'sharpness_selected_indices_comparison.png'))
+    plt.show()
+    # selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50, input_path=base_dir)
+    # copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
 
 
 
 if __name__ == "__main__":
+    from build_masks import process_folder
+    #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
+    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\Test_Foot"
+    raw_images_path=base_dir + "\\raw_images"
+    sharp_images_path=base_dir + "\\local_sharp_images"
+    mask_path=base_dir + "\\masks"
+    video_path=r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Fuß\Fuss_combined.mp4"
+    # extract_images_from_video(video_path, raw_images_path, skip_frames=0)
+    # process_folder(raw_images_path, mask_path)
+    #sharp_df=get_image_sharpness(raw_images_path, mask_folder_path=mask_path)
+    #indices=select_sharp_images(sharp_df, segments=50, min_sharpness_percentile=50, input_path=base_dir)
+    #copy_selected_images(indices, raw_images_path, sharp_images_path)
+    view_masks_and_images(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\Test_Foot",plot=False, save_gif=True, gif_name="masked_images.gif", gif_duration=50, all_images=True)
+     #view_masks_and_images(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial3",plot=False, save_gif=True, gif_name="masked_images.gif", gif_duration=0.5)
+    #view_masks_and_images(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\local_sharp\Trial3",plot=False, save_gif=True, gif_name="masked_images.gif", gif_duration=0.5)
+    #plot_sharpness(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial3\sharp_images", save_gif=True, gif_name="sharpness_per_pixel.gif", gif_duration=0.5)
+    #plot_sharpness(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\local_sharp\Trial3\sharp_images", save_gif=True, gif_name="sharpness_per_pixel.gif", gif_duration=0.5)
+    #plot_sharpness_histo(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_SharpnessMask\t2\sharp_images", save_gif=True, gif_name="sharpness_histograms.gif", gif_duration=0.5)
     #main()
     # plt.show()
-    #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
-    video_path=r"C:\Users\Reich\Interface\Videos\Package_Recordings\Tee\Tee_Orbit2_5sek.mp4"
-    extract_images_from_video(video_path, r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2", skip_frames=0)
