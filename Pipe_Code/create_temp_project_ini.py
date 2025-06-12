@@ -1,36 +1,39 @@
 import configparser
 import os
+from run_command import run_command
 
 def setup_project_ini(workspace_path: str, *keywords) -> str:
-    ini_file_command = f'call colmap project_generator --output_path "{workspace_path}\\project.ini" --quality high '
-    os.system(ini_file_command)
-    
-    db_file_command = f'call colmap database_creator --database_path "{workspace_path}\\database.db"'
-    os.system(db_file_command)
-    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_project_ini_path = os.path.join(script_dir, 'base_project.ini')
     project_ini_path = os.path.join(workspace_path, 'project.ini')
     database_path = os.path.join(workspace_path, 'database.db')
-    
-    with open(project_ini_path, 'r', encoding='utf-8') as file:
-        lines = file.readlines()
-    
-    if not lines[0].startswith('['):
-        lines.insert(0, '[HEADER]\n')
-    
-    with open(project_ini_path, 'w', encoding='utf-8') as file:
-        file.writelines(lines)
-    
+
+    if os.path.exists(base_project_ini_path):
+        # Copy base_project.ini to the workspace as project.ini
+        with open(base_project_ini_path, 'r', encoding='utf-8') as base_file:
+            base_content = base_file.read()
+        with open(project_ini_path, 'w', encoding='utf-8') as project_file:
+            project_file.write(base_content)
+    else:
+        # Generate project.ini using colmap
+        ini_file_command = f'colmap project_generator --output_path \"{project_ini_path}\" --quality high'
+        run_command(ini_file_command)
+
+    # Create database file
+    db_file_command = f'colmap database_creator --database_path \"{database_path}\"'
+    run_command(db_file_command)
+
+    # Ensure [HEADER] section exists and add database_path
     config = configparser.ConfigParser()
     config.read(project_ini_path)
-    
+
     if 'HEADER' not in config:
         config['HEADER'] = {}
-    
+
     config['HEADER']['database_path'] = database_path
-    
+
     with open(project_ini_path, 'w', encoding='utf-8') as configfile:
         config.write(configfile)
-
 
     return project_ini_path, database_path
    
@@ -55,10 +58,12 @@ def append_to_total_project_ini(temp_ini_path, total_ini_path):
 
 def insert_keywords_to_project_ini(ini_path: str, keyword: str, parameter: str, value: str):
     config = configparser.ConfigParser()
+    config.optionxform = str  # preserve case for keys
     config.read(ini_path)
     
     if keyword not in config:
-        raise ValueError(f"Keyword [{keyword}] not found in the ini file.")
+        print(f"Keyword [{keyword}] not found in the ini file. No changes made.")
+        return ini_path
     
     config[keyword][parameter] = value
     
@@ -141,9 +146,17 @@ def create_temp_project_ini(ini_path:str, *keywords):
     print(f"TempProject.ini created at {temp_ini_path}")
     return temp_ini_path
 
+def append_to_total_project_ini(temp_ini_path, total_ini_path):
+    with open(temp_ini_path, 'r') as temp_file:
+        temp_data = temp_file.read()
+    with open(total_ini_path, 'a') as total_file:
+        total_file.write(temp_data + '\n')
+        total_file.write('---NextPart\n')
+
+
 def execute_tepm_project_ini(ini_path, *keywords):
-    command = f'call colmap {keywords[0]} --project_path "{ini_path}"'
-    os.system(command)
+    command = f'colmap {keywords[0]} --project_path \"{ini_path}\"'
+    run_command(command)
 
 def standard_ini_pipline(workspace_path, image_path, mask_path, *keywords):
     ini_path, database_path=setup_project_ini(workspace_path)

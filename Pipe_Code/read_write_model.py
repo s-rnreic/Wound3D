@@ -158,8 +158,8 @@ def write_cameras_text(cameras, path):
         void Reconstruction::ReadCamerasText(const std::string& path)
     """
     HEADER = (
-        "# Camera list with one line of data per camera:\n"
-        + "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n"
+        '# Camera list with one line of data per camera:\n'
+        + '#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n'
         + f"# Number of cameras: {len(cameras)}\n"
     )
     with open(path, "w") as fid:
@@ -269,9 +269,9 @@ def write_images_text(images, path):
     else:
         mean_observations = sum((len(img.point3D_ids) for _, img in images.items())) / len(images)
     HEADER = (
-        "# Image list with two lines of data per image:\n"
-        + "#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n"
-        + "#   POINTS2D[] as (X, Y, POINT3D_ID)\n"
+        '# Image list with two lines of data per image:\n'
+        + '#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n'
+        + '#   POINTS2D[] as (X, Y, POINT3D_ID)\n'
         + f"# Number of images: {len(images)}, mean observations per image: {mean_observations}\n"
     )
 
@@ -372,8 +372,8 @@ def write_points3D_text(points3D, path):
     else:
         mean_track_length = sum((len(pt.image_ids) for _, pt in points3D.items())) / len(points3D)
     HEADER = (
-        "# 3D point list with one line of data per point:\n"
-        + "#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n"
+        '# 3D point list with one line of data per point:\n'
+        + '#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n'
         + f"# Number of points: {len(points3D)}, mean track length: {mean_track_length}\n"
     )
 
@@ -410,7 +410,7 @@ def write_points3D_binary(points3D, path_to_model_file):
 def detect_model_format(path: Path, ext: str) -> bool:
     parts = ["cameras", "images", "points3D"]
     if all([(path / p).with_suffix(ext) for p in parts]):
-        print("Detected model format: '" + ext + "'")
+        print(f"Detected model format: '{ext}'")
         return True
 
     return False

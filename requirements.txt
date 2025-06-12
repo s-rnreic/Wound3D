@@ -1,1 +1,9 @@
-
+numpy
+opencv-python
+matplotlib
+tqdm
+rerun-sdk
+requests
+pandas
+ffmpeg
+trimesh
