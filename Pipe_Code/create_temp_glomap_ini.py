@@ -57,7 +57,7 @@ def create_glomap_ini(file_path):
     config = configparser.ConfigParser()
     config.optionxform = str
 
-    config['DEFAULT'] = {
+    config['GLOMAP'] = {
         'constraint_type': 'ONLY_POINTS',
         'output_format': 'bin',
         'ba_iteration_num': '3',
@@ -103,6 +103,8 @@ def create_glomap_ini(file_path):
 
     with open(file_path, 'w') as configfile:
         config.write(configfile)
+    
+    return file_path
 
 def execute_glomap(ini_file_path, database_path, output_path, image_path):
     config = configparser.ConfigParser()
@@ -111,16 +113,19 @@ def execute_glomap(ini_file_path, database_path, output_path, image_path):
 
     command = f"glomap mapper --database_path \"{database_path}\" --output_path \"{output_path}\" --image_path \"{image_path}\""
     
-    for key in config['DEFAULT']:
-        command += f" --{key} {config['DEFAULT'][key]}"
-    
+    for key in config['GLOMAP']:
+        command += f" --{key} {config['GLOMAP'][key]}"
+
     run_command(command)
 
-# Example usage:
-# create_glomap_ini('glomap_config.ini')
-# execute_glomap('glomap_config.ini', 'path/to/database', 'path/to/output')
 
 if __name__ == '__main__':
-    workspace_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test_glomap'
-    create_glomap_ini(workspace_path + '\\glomap_config.ini')
-    execute_glomap(workspace_path + '\\glomap_config.ini', workspace_path + '\\database.db', workspace_path + '\\sparse')
+    import create_temp_project_ini as ctpi
+    custom_parameters = [
+        ('GLOMAP', 'RelPoseEstimation.max_epipolar_error', 20)
+    ]
+    workspace_path = r'Experiments/Experiment_test'
+    ini_path = create_glomap_ini(workspace_path + '\\glomap_config.ini')
+    for header, param, value in custom_parameters:
+            ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
+    #execute_glomap(workspace_path + '\\glomap_config.ini', workspace_path + '\\database.db', workspace_path + '\\sparse')
