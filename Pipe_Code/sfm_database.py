@@ -3,7 +3,7 @@ import sqlite3
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
-from read_write_model import read_model, read_points3D_binary
+from Pipe_Code.read_write_model import read_model, read_points3D_binary  # Changed to absolute import
 from pathlib import Path
 
 # Creates and manages the database of the colmap/glomap Pipeline
