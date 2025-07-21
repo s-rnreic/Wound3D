@@ -128,13 +128,18 @@ def process_video_with_sam2(image_folder_path, checkpoint=None, model_cfg=None, 
         points = input_points
         labels = np.ones(len(points), dtype=np.int32)
     elif interactive:
-        plt.imshow(cv2.cvtColor(cv2.imread(os.path.join(image_folder_path, frame_names[0])), cv2.COLOR_BGR2RGB))
-        plt.title("Click to select points")
-        plt.axis("off")
-        points = plt.ginput(n=0, timeout=0)
-        plt.close()
-        points = np.array(points, dtype=np.int32)
-        labels = np.ones(len(points), dtype=np.int32)
+        if len(frame_names) > 0:
+            frame_idx = min(780, len(frame_names) - 1)  # Use 780 or the last available frame
+            plt.imshow(cv2.cvtColor(cv2.imread(os.path.join(image_folder_path, frame_names[frame_idx])), cv2.COLOR_BGR2RGB))
+            plt.title("Click to select points")
+            plt.axis("off")
+            points = plt.ginput(n=0, timeout=0)
+            plt.close()
+            points = np.array(points, dtype=np.int32)
+            labels = np.ones(len(points), dtype=np.int32)
+        else:
+            print("Warning: No frames available in the folder.")
+            return {}
     else:
         img_path = os.path.join(image_folder_path, frame_names[0])
         img = cv2.imread(img_path)
@@ -164,7 +169,7 @@ def save_masks(result, output_path):
     for frame_idx, obj_masks in result.items():
         for obj_id, mask in obj_masks.items():
             mask_img = (mask.squeeze() * 255).astype(np.uint8)
-            out_filename = f"{frame_idx:04d}.png"
+            out_filename = f"{frame_idx + 1:05d}.png"
             out_filepath = os.path.join(output_path, out_filename)
             cv2.imwrite(out_filepath, mask_img)
             
@@ -174,34 +179,35 @@ if __name__ == '__main__':
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2"
-    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2\masks"
-    
+    img_folder_path = r"G:\Reco_Motorad\sharp_images"
+    output_path = r"G:\Reco_Motorad\masks"
+
 
     
     result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=True)
-    for frame_idx, obj_masks in result.items():
-        img_path_jpg = os.path.join(img_folder_path, f"{frame_idx:05d}.jpg")
-        img_path_png = os.path.join(img_folder_path, f"{frame_idx:05d}.png")
-        print(img_path_jpg)
-        if os.path.exists(img_path_jpg):
-            img_path = img_path_jpg
-        elif os.path.exists(img_path_png):
-            img_path = img_path_png
-        else:
-            print(f"Warning: No image found for frame {frame_idx} (tried .jpg and .png)")
-            continue
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Warning: Failed to load image at {img_path}")
-            continue
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        for obj_id, mask in obj_masks.items():
-            mask_bool = mask.squeeze().astype(bool)
-            masked_img = np.zeros_like(img_rgb)
-            masked_img[mask_bool] = img_rgb[mask_bool]
-            plt.imshow(masked_img)
-            plt.title(f"Frame {frame_idx}, Object {obj_id}")
-            plt.axis("off")
-            plt.show()
+    save_masks(result, output_path)
+    # for frame_idx, obj_masks in result.items():
+    #     img_path_jpg = os.path.join(img_folder_path, f"{frame_idx:05d}.jpg")
+    #     img_path_png = os.path.join(img_folder_path, f"{frame_idx:05d}.png")
+    #     print(img_path_jpg)
+    #     if os.path.exists(img_path_jpg):
+    #         img_path = img_path_jpg
+    #     elif os.path.exists(img_path_png):
+    #         img_path = img_path_png
+    #     else:
+    #         print(f"Warning: No image found for frame {frame_idx} (tried .jpg and .png)")
+    #         continue
+    #     img = cv2.imread(img_path)
+    #     if img is None:
+    #         print(f"Warning: Failed to load image at {img_path}")
+    #         continue
+    #     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    #     for obj_id, mask in obj_masks.items():
+    #         mask_bool = mask.squeeze().astype(bool)
+    #         masked_img = np.zeros_like(img_rgb)
+    #         masked_img[mask_bool] = img_rgb[mask_bool]
+    #         plt.imshow(masked_img)
+    #         plt.title(f"Frame {frame_idx}, Object {obj_id}")
+    #         plt.axis("off")
+    #         plt.show()
     # Save all masks in result to output_path

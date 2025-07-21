@@ -282,5 +282,5 @@ if __name__ == "__main__":
     #main()
     # plt.show()
     #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
-    video_path=r"C:\Users\Reich\Interface\Videos\Package_Recordings\Tee\Tee_Orbit2_5sek.mp4"
-    extract_images_from_video(video_path, r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\T2", skip_frames=0)
+    video_path=r"C:\Users\Reich\Interface\Videos\Thresh_Recording\Thresh_Orbit2.mp4"
+    extract_images_from_video(video_path, r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\test\t1\raw_images", skip_frames=0)
