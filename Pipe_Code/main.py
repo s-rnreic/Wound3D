@@ -70,7 +70,9 @@ def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:f
     
     if enhance_option is not None:
         prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
-    
+    if Masking:
+        result=masking.process_video_with_sam2(raw_images_path, interactive=True)
+        masking.save_masks(result, image_mask_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
