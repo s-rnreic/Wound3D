@@ -58,7 +58,7 @@ def create_workspace(workspace_path:str)->None:
 
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=50.0, enhance_option:str=None , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=25.0, enhance_option:str=None , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.extract_images_from_video(input_path, raw_images_path)
     
@@ -70,9 +70,7 @@ def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:f
     
     if enhance_option is not None:
         prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
-    if Masking:
-        result=masking.process_video_with_sam2(raw_images_path, interactive=True)
-        masking.save_masks(result, image_mask_path)
+    
     elapsed_time = time.time() - start_time
     log_time(log_file, "Video_Pipeline", elapsed_time)
     return sharp_image_path, image_mask_path
@@ -154,7 +152,7 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None, sharpness_value=50.0)->float:
+def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None, sharpness_value=25)->float:
     global ini_path, database_path , sparse_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
@@ -202,14 +200,14 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\Interface\Videos\Package_Recordings\old_Roll\Roll_Orbit3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\local_sharp"
+        video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\test\t2"
         trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Mask_Sparse_Dense'
         experiment_description = 'Reco Mandarin Orbit2, 1.0 resize factor, segments = 40, sharpness is calculated for whole image. Masks are applied only for Dense Reconstruction'
     
     
     resize_factor = 1.0
-    segments = 70
+    segments = 50
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
@@ -228,36 +226,4 @@ if __name__ == '__main__':
     trial_database_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
     segments = [30,50,70,90]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
-    # custom_parameters = [
-    #     ('GLOMAP', 'RelPoseEstimation.max_epipolar_error', [2,4,10,20])
-    # ]
-    #main()
-   
-    from glob import glob
-    import os
-    from itertools import product  # Add import for product
-    trial_number = 1
-    for rf in resize_factor:
-        for seg in segments:
-                # For each value in custom_parameters, generate all combinations
-                # param_combinations = []
-                # for header, param, values in custom_parameters:
-                #     for value in values:
-                #         param_combinations.append([(header, param, value)])
-                #for param_set in param_combinations:
-            workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
-            experiment_description = f"Reco Fuß, {seg} images, Experiment with resize_factor = {rf}, segments = {seg}, sharpness is calculated for the whole image"
-            image_options = {
-                'reduce_size': rf,
-            }
-            total_elapsed_time = run_colmap_process(video_path, seg, image_options, enhance_option=None)
-            print(f"Completed run with resize_factor = {rf}, segments = {seg}, Total elapsed time: {total_elapsed_time:.2f} seconds")
-            sfm_database.insert_experiment2db(
-                trial_database_path,
-                workspace_path,
-                experiment_description=experiment_description,
-                resize_factor=rf,
-                fraction_of_images=seg,
-                elapsed_time=total_elapsed_time
-            )
-            trial_number += 1
+    main()

@@ -120,11 +120,19 @@ def process_image(image_path, output_folder):
         cv2.imwrite(output_path, mask)
 
 def process_folder(input_folder, output_folder, num_workers=4):
-    os.makedirs(output_folder, exist_ok=True)
-    image_paths = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
-    
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        executor.map(process_image, image_paths, [output_folder] * len(image_paths))
+    Use_SAM2 = True
+    if Use_SAM2:
+        checkpoint = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
+        model_cfg = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
+        result = process_video_with_sam2(input_folder, checkpoint, model_cfg)
+        save_masks(result, output_folder)
+        return
+    else:
+        os.makedirs(output_folder, exist_ok=True)
+        image_paths = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
+        
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            executor.map(process_image, image_paths, [output_folder] * len(image_paths))
 
 def process_image_with_sam2(image_path, checkpoint, model_cfg,  multimask_output=True):
      # Assume model_cfg has the same base name as checkpoint, but with .yaml extension
@@ -177,7 +185,7 @@ def process_video_with_sam2(image_folder_path, checkpoint=None, model_cfg=None, 
     frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
     inference_state = predictor.init_state(video_path=image_folder_path)
     predictor.reset_state(inference_state)
-
+    
     if input_points is not None:
         points = input_points
         labels = np.ones(len(points), dtype=np.int32)
@@ -195,10 +203,22 @@ def process_video_with_sam2(image_folder_path, checkpoint=None, model_cfg=None, 
             print("Warning: No frames available in the folder.")
             return {}
     else:
-        img_path = os.path.join(image_folder_path, frame_names[0])
+        img_path = os.path.join(image_folder_path, frame_names[9])
         img = cv2.imread(img_path)
-        points = [[img.shape[1] // 2, img.shape[0] // 2]]
-        labels = np.array([1], np.int32)
+        h, w = img.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        radius = int(0.4 * min(h, w) / 2)
+        
+        # Generate 10 random points within the circle
+        points = []
+        while len(points) < 5:
+            x = np.random.randint(center_x - radius, center_x + radius)
+            y = np.random.randint(center_y - radius, center_y + radius)
+            if (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2:
+                points.append([x, y])
+        
+        labels = np.ones(len(points), dtype=np.int32)
+
         
         
     _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
@@ -233,35 +253,11 @@ if __name__ == '__main__':
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"G:\Reco_Motorad\sharp_images"
-    output_path = r"G:\Reco_Motorad\masks"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
+    output_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2"
 
 
     
-    result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=True)
+    result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=False)
     save_masks(result, output_path)
-    # for frame_idx, obj_masks in result.items():
-    #     img_path_jpg = os.path.join(img_folder_path, f"{frame_idx:05d}.jpg")
-    #     img_path_png = os.path.join(img_folder_path, f"{frame_idx:05d}.png")
-    #     print(img_path_jpg)
-    #     if os.path.exists(img_path_jpg):
-    #         img_path = img_path_jpg
-    #     elif os.path.exists(img_path_png):
-    #         img_path = img_path_png
-    #     else:
-    #         print(f"Warning: No image found for frame {frame_idx} (tried .jpg and .png)")
-    #         continue
-    #     img = cv2.imread(img_path)
-    #     if img is None:
-    #         print(f"Warning: Failed to load image at {img_path}")
-    #         continue
-    #     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    #     for obj_id, mask in obj_masks.items():
-    #         mask_bool = mask.squeeze().astype(bool)
-    #         masked_img = np.zeros_like(img_rgb)
-    #         masked_img[mask_bool] = img_rgb[mask_bool]
-    #         plt.imshow(masked_img)
-    #         plt.title(f"Frame {frame_idx}, Object {obj_id}")
-    #         plt.axis("off")
-    #         plt.show()
-    # Save all masks in result to output_path
+    
