@@ -7,6 +7,7 @@ import ffmpeg  # Ensure this is from the ffmpeg-python library
 import pandas as pd
 from utils import image_enhancement as ie
 from utils import CLAHE as clahe
+from utils.SavitzkyGolay import Savitzky_Golay
 
 
 def extract_images_from_video(input_video, output_path, skip_frames=0):
@@ -114,7 +115,7 @@ def get_image_sharpness(input_folder, mask_folder_path=None, image_options=None,
     return sharpness_df
 
 
-def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50.0, absolut_min=25, input_path=None):
+def select_sharp_images(sharpness_df, segments,  absolut_min=25, PLOT=False, input_path=None):
     """
     Select indices of sharpest images, ensuring they are nearly equidistant and above a sharpness threshold.
     "absolut_min": if the image-sharpness is below this value then a certain area around this image is not considered for image selection
@@ -130,48 +131,262 @@ def select_sharp_images(sharpness_df, segments, min_sharpness_percentile=50.0, a
     if len(sharpness_df) < segments:
         print("Too few images. Algorithm takes now the maximal number of images.")
         segments = len(sharpness_df)
-        
     
     print(f"Selecting {segments} images from {len(sharpness_df)} images.")
     
-    # Calculate the minimum sharpness threshold
-    min_sharpness = sharpness_df['Sharpness'].quantile(min_sharpness_percentile / 100.0)
-    if min_sharpness < absolut_min:
-        print("The Sharpness of the whole Dataset seems to be to low or to blurry to be reconstructed.")
+    # Calculate segment size
+    segment_size = len(sharpness_df) // segments
     
+    # Get filtered indices using Savitzky-Golay filter
+    potential_indices = Savitzky_Golay(sharpness_df, window_length=100, polyorder=3, PLOT=False, tolerance=0.05)
     
+    # Filter indices that meet the threshold
+    above_threshold_indices = [idx for idx in potential_indices if sharpness_df.iloc[idx]['Sharpness'] >= absolut_min]
     
-    
+    # Initialize selected indices
     selected_indices = []
+    
     for segment in range(segments):
         # Calculate the start and end indices for this segment
-        start_idx = (len(sharpness_df) * segment) // segments
-        end_idx = (len(sharpness_df) * (segment + 1)) // segments
+        start_idx = segment_size * segment
+        end_idx = segment_size * (segment + 1) if segment < segments - 1 else len(sharpness_df)
         
         # Filter images in this segment that are above the sharpness threshold
-        segment_df = sharpness_df.iloc[start_idx:end_idx]
-        above_threshold_df = segment_df[segment_df['Sharpness'] >= min_sharpness]
+        segment_potential_indices = [idx for idx in above_threshold_indices if start_idx <= idx < end_idx]
         
-        if not above_threshold_df.empty:
-            # Find the index closest to the middle of the original segment range
+        if segment_potential_indices:
+            # Find the index closest to the middle of the segment
             middle_idx = start_idx + (end_idx - start_idx) // 2
             
-            # Manual approach to find the closest index
-            closest_idx_diff = abs(above_threshold_df.index - middle_idx)
-            closest_idx = closest_idx_diff.argmin()
-            
-            selected_indices.append(above_threshold_df.iloc[closest_idx].name)
+            # Find the closest index to the middle
+            closest_idx = min(segment_potential_indices, key=lambda idx: abs(idx - middle_idx))
+            selected_indices.append(closest_idx)
         else:
-            highest_threshold_df = segment_df.loc[segment_df['Sharpness'].idxmax()]
-            if highest_threshold_df['Sharpness'] < sharpness_df['Sharpness'].quantile(95.0 / 100.0):
-                selected_indices.append(highest_threshold_df.name)
-            else:
-                pass
+            # If no images in this segment are above the threshold, mark as None for now
+            selected_indices.append(None)
+    
+    # Plot the selected images after the first pass
+    if input_path or PLOT:
+        plt.figure(figsize=(14, 7))
+        sharpness_values = sharpness_df['Sharpness'].values
+        plt.plot(sharpness_values, label='Sharpness', color='blue')
+        
+        # Add vertical lines to separate segments
+        for i in range(1, segments):
+            segment_boundary = i * segment_size
+            plt.axvline(x=segment_boundary, color='gray', linestyle='--', alpha=0.5)
+        
+        # Highlight selected images
+        valid_indices = [idx for idx in selected_indices if idx is not None]
+        if valid_indices:
+            plt.scatter(valid_indices, sharpness_values[valid_indices], color='green', 
+                       s=80, label='Initial Selected Images', zorder=5)
+            
+        # Highlight gaps (None values)
+        none_positions = [i for i, idx in enumerate(selected_indices) if idx is None]
+        if none_positions:
+            for pos in none_positions:
+                center = pos * segment_size + segment_size // 2
+                plt.axvspan(pos * segment_size, (pos + 1) * segment_size, 
+                           alpha=0.2, color='red', label='_nolegend_')
+                plt.text(center, max(sharpness_values) * 0.9, "Gap", 
+                        ha='center', color='red', fontweight='bold')
+        
+        plt.xlabel('Image Index')
+        plt.ylabel('Sharpness')
+        plt.title('Initial Image Selection - Before Filling Gaps')
+        plt.legend()
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plt.tight_layout()
+        
+        # Save the first pass plot
+        if not os.path.exists(input_path):
+            os.makedirs(input_path)
+        
+        if input_path:
+            plt.savefig(os.path.join(input_path, 'initial_selection.png'))
+        elif PLOT:
+            plt.show()
+    
+    # Fill in segments with no selected images
+    filled_indices = []
+    for seg in range(segments):
+        if selected_indices[seg] is not None:
+            continue
+        print("found empty segment:", seg)
+        # Find left and right neighbors with a selected image
+        left = seg - 1
+        while left >= 0 and selected_indices[left] is None:
+            left -= 1
+            
+        right = seg + 1
+        while right < segments and selected_indices[right] is None:
+            right += 1
+            
+        # Define search range based on segment boundaries, not just neighboring images
+        left_segment_edge = seg * segment_size
+        right_segment_edge = (seg + 1) * segment_size if seg < segments - 1 else len(sharpness_df)
+        
+        # Expand search range to include neighboring segments
+        if left >= 0:
+            left_segment_edge = left * segment_size
+        if right < segments:
+            right_segment_edge = (right + 1) * segment_size if right < segments - 1 else len(sharpness_df)
+        
+        # Find potential candidates in the combined range that are above threshold
+        candidates = [idx for idx in above_threshold_indices 
+                     if left_segment_edge <= idx <= right_segment_edge]
 
-    if input_path is not None:
-        plot_sharpness_results(sharpness_df, selected_indices, min_sharpness, segments, input_path)
-
-    return selected_indices
+        if not candidates:
+            # if no candidates, dont select any image in this segment
+            print(f"Segment {seg}: No candidates found, skipping this segment.")
+            continue
+            
+        if len(candidates) < 3:
+            # Not enough candidates for a triplet, pick no image in this segment
+            continue
+        
+        # Find triplet with most even spacing relative to segment edges
+        best_triplet = None
+        best_spacing_score = float('inf')
+        
+        # Try all possible triplets
+        for i in range(len(candidates) - 2):
+            for j in range(i + 1, len(candidates) - 1):
+                for k in range(j + 1, len(candidates)):
+                    triplet = (candidates[i], candidates[j], candidates[k])
+                    
+                    # Create a list of all points including segment boundaries
+                    all_points = [left_segment_edge] + list(triplet) + [right_segment_edge]
+                    
+                    # Calculate spacings between adjacent points
+                    spacings = [all_points[i+1] - all_points[i] for i in range(len(all_points)-1)]
+                    
+                    # Calculate variance of spacings (lower is better - more even)
+                    spacing_variance = np.var(spacings)
+                    
+                    # Consider both variance and the average distance (prefer larger distances)
+                    # This helps avoid clumping in one area
+                    avg_spacing = np.mean(spacings)
+                    combined_score = spacing_variance / avg_spacing
+                    
+                    if combined_score < best_spacing_score:
+                        best_spacing_score = combined_score
+                        best_triplet = triplet
+        
+        if best_triplet:
+            # Assign the triplet to fill the gap(s)
+            if left >= 0 and selected_indices[left] is None:
+                selected_indices[left] = best_triplet[0]
+                filled_indices.append(best_triplet[0])
+                
+            selected_indices[seg] = best_triplet[1]
+            filled_indices.append(best_triplet[1])
+            
+            if right < segments and selected_indices[right] is None:
+                selected_indices[right] = best_triplet[2]
+                filled_indices.append(best_triplet[2])
+        
+        print(f"Segment {seg}: Filled with triplet {best_triplet} (spacing score: {best_spacing_score:.2f})")
+        
+        # Plot after each triplet is added
+        if input_path or PLOT and best_triplet:
+            plt.figure(figsize=(14, 7))
+            sharpness_values = sharpness_df['Sharpness'].values
+            plt.plot(sharpness_values, label='Sharpness', color='blue')
+            
+            # Add vertical lines to separate segments
+            for i in range(1, segments):
+                segment_boundary = i * segment_size
+                plt.axvline(x=segment_boundary, color='gray', linestyle='--', alpha=0.5)
+            
+            # Add vertical lines for the segment range we're working with
+            plt.axvline(x=left_segment_edge, color='purple', linestyle='-', alpha=0.7, 
+                      linewidth=2, label='Selection Range')
+            plt.axvline(x=right_segment_edge, color='purple', linestyle='-', alpha=0.7, linewidth=2)
+            
+            # Highlight all selected images so far
+            valid_indices = [idx for idx in selected_indices if idx is not None]
+            if valid_indices:
+                plt.scatter(valid_indices, sharpness_values[valid_indices], color='green', 
+                           s=60, label='Selected Images', zorder=5)
+                
+            # Highlight newly added images from this triplet
+            new_indices = [idx for idx in filled_indices if idx in best_triplet]
+            if new_indices:
+                plt.scatter(new_indices, sharpness_values[new_indices], color='red', 
+                           s=100, marker='*', label='Newly Added Images', zorder=6)
+            
+            # Draw the triplet connection
+            if best_triplet:
+                triplet_x = list(best_triplet)
+                triplet_y = [sharpness_values[i] for i in best_triplet]
+                plt.plot(triplet_x, triplet_y, 'r--', alpha=0.7, linewidth=2, label='Triplet')
+                
+                # Show the spacing values
+                all_points = [left_segment_edge] + list(best_triplet) + [right_segment_edge]
+                spacings = [all_points[i+1] - all_points[i] for i in range(len(all_points)-1)]
+                
+                for i, spacing in enumerate(spacings):
+                    x_pos = all_points[i] + spacing/2
+                    y_pos = max(sharpness_values) * 0.8
+                    plt.text(x_pos, y_pos, f"d={spacing}", ha='center', va='center',
+                            bbox=dict(facecolor='white', alpha=0.7))
+            
+            plt.xlabel('Image Index')
+            plt.ylabel('Sharpness')
+            plt.title(f'Image Selection After Filling Gap in Segment {seg}\n'
+                      f'Spacing Score: {best_spacing_score:.2f}')
+            plt.legend()
+            plt.grid(True, linestyle=':', alpha=0.6)
+            plt.tight_layout()
+            
+            # Save each triplet addition plot
+            if input_path:
+                plt.savefig(os.path.join(input_path, f'gap_filling_segment_{seg}.png'))
+            elif PLOT:
+                plt.show()
+    
+    # Final pass - make sure no None values remain
+    for i in range(segments):
+        if selected_indices[i] is None:
+            # Use middle of segment as last resort
+            selected_indices[i] = (i * segment_size) + (segment_size // 2)
+    
+    # Create final plot with all selected images
+    if input_path or PLOT:
+        plt.figure(figsize=(14, 7))
+        sharpness_values = sharpness_df['Sharpness'].values
+        plt.plot(sharpness_values, label='Sharpness', color='blue')
+        
+        # Add vertical lines to separate segments
+        for i in range(1, segments):
+            segment_boundary = i * segment_size
+            plt.axvline(x=segment_boundary, color='gray', linestyle='--', alpha=0.5)
+        
+        # Highlight all selected images
+        plt.scatter(selected_indices, sharpness_values[selected_indices], color='green', 
+                   s=80, label='Final Selected Images', zorder=5)
+        
+        # Highlight filled images
+        if filled_indices:
+            plt.scatter(filled_indices, sharpness_values[filled_indices], color='orange', 
+                       marker='*', s=100, label='Gap-Filled Images', zorder=6)
+        
+        plt.xlabel('Image Index')
+        plt.ylabel('Sharpness')
+        plt.title('Final Image Selection')
+        plt.legend()
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plt.tight_layout()
+        
+        # Save the final selection plot
+        if input_path or PLOT:
+            plt.savefig(os.path.join(input_path, 'final_selection.png'))
+        elif PLOT:
+            plt.show()
+    
+    return [idx for idx in selected_indices if idx is not None]
 
 
 
@@ -362,21 +577,14 @@ def main():
 if __name__ == "__main__":
     from build_masks import process_folder
     #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
-    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\Test_Foot"
+    video_path=r"c:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit2.mp4"
+    base_dir = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine"
     raw_images_path=base_dir + "\\raw_images"
-    sharp_images_path=base_dir + "\\local_sharp_images"
+    sharp_images_path=r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
     mask_path=base_dir + "\\masks"
-    video_path=r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Fuß\Fuss_combined.mp4"
-    # extract_images_from_video(video_path, raw_images_path, skip_frames=0)
+    
+    #extract_images_from_video(video_path, raw_images_path, skip_frames=0)
     # process_folder(raw_images_path, mask_path)
-    #sharp_df=get_image_sharpness(raw_images_path, mask_folder_path=mask_path)
-    #indices=select_sharp_images(sharp_df, segments=50, min_sharpness_percentile=50, input_path=base_dir)
-    #copy_selected_images(indices, raw_images_path, sharp_images_path)
-    view_masks_and_images(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\Test_Foot",plot=False, save_gif=True, gif_name="masked_images.gif", gif_duration=50, all_images=True)
-     #view_masks_and_images(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial3",plot=False, save_gif=True, gif_name="masked_images.gif", gif_duration=0.5)
-    #view_masks_and_images(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\local_sharp\Trial3",plot=False, save_gif=True, gif_name="masked_images.gif", gif_duration=0.5)
-    #plot_sharpness(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial3\sharp_images", save_gif=True, gif_name="sharpness_per_pixel.gif", gif_duration=0.5)
-    #plot_sharpness(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\local_sharp\Trial3\sharp_images", save_gif=True, gif_name="sharpness_per_pixel.gif", gif_duration=0.5)
-    #plot_sharpness_histo(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_SharpnessMask\t2\sharp_images", save_gif=True, gif_name="sharpness_histograms.gif", gif_duration=0.5)
-    #main()
-    # plt.show()
+    sharp_df=get_image_sharpness(raw_images_path, mask_folder_path=None)
+    indices=select_sharp_images(sharp_df, segments=50, absolut_min=10, input_path=base_dir)
+    copy_selected_images(indices, raw_images_path, sharp_images_path)

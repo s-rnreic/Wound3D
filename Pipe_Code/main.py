@@ -58,12 +58,12 @@ def create_workspace(workspace_path:str)->None:
 
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=50.0, enhance_option:str=None , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=25.0, enhance_option:str=None , Masking:bool=True)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.extract_images_from_video(input_path, raw_images_path)
     
     sharpness_values = prepare_vid_for_colmap_v5.get_image_sharpness(raw_images_path,mask_folder_path=None, image_options=image_options)
-    selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, min_sharpness_percentile=min_sharpness_percentile, input_path=workspace_path)
+    selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, absolut_min=min_sharpness_percentile, input_path=workspace_path)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
     if Masking:
         masking.process_folder(sharp_image_path, image_mask_path)
@@ -219,43 +219,13 @@ def main()->None:
 
 
 if __name__ == '__main__':
+    global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
-    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Hand"
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test"
     #video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
-    video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Hand\Hand1.mp4"
-    trial_database_path = base_workspace_path
+    video_path = r"c:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
+    workspace_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
-    segments = [30,50,70,90]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
-    # custom_parameters = [
-    #     ('GLOMAP', 'RelPoseEstimation.max_epipolar_error', [2,4,10,20])
-    # ]
-    #main()
+    segments = [50]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
    
-    from glob import glob
-    import os
-    from itertools import product  # Add import for product
-    trial_number = 1
-    for rf in resize_factor:
-        for seg in segments:
-                # For each value in custom_parameters, generate all combinations
-                # param_combinations = []
-                # for header, param, values in custom_parameters:
-                #     for value in values:
-                #         param_combinations.append([(header, param, value)])
-                #for param_set in param_combinations:
-            workspace_path = os.path.join(base_workspace_path, f"Trial{trial_number}")
-            experiment_description = f"Reco Fuß, {seg} images, Experiment with resize_factor = {rf}, segments = {seg}, sharpness is calculated for the whole image"
-            image_options = {
-                'reduce_size': rf,
-            }
-            total_elapsed_time = run_colmap_process(video_path, seg, image_options, enhance_option=None)
-            print(f"Completed run with resize_factor = {rf}, segments = {seg}, Total elapsed time: {total_elapsed_time:.2f} seconds")
-            sfm_database.insert_experiment2db(
-                trial_database_path,
-                workspace_path,
-                experiment_description=experiment_description,
-                resize_factor=rf,
-                fraction_of_images=seg,
-                elapsed_time=total_elapsed_time
-            )
-            trial_number += 1
+    run_colmap_process(video_path, segments[0], {'reduce_size': resize_factor[0]}, enhance_option=None, custom_parameters=None, sharpness_value=25.0)
