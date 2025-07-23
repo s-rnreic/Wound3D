@@ -5,9 +5,21 @@ from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
 import torch
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), 'external', 'sam2'))
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
+import importlib.util
+
+# Add SAM2 path to sys.path for potential imports
+sam2_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external', 'sam2')
+sys.path.append(sam2_path)
+
+# Try to import SAM2 modules, but make them optional
+SAM2_AVAILABLE = False
+try:
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    SAM2_AVAILABLE = True
+except ImportError:
+    print("SAM2 modules not available. SAM2-related functionality will be disabled unless installed.")
+
 import matplotlib.pyplot as plt
 
 
@@ -119,14 +131,101 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4):
-    Use_SAM2 = True
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=False):
+
     if Use_SAM2:
+        
         checkpoint = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
         model_cfg = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
         result = process_video_with_sam2(input_folder, checkpoint, model_cfg)
         save_masks(result, output_folder)
         return
+    
+    elif Use_DeepSkin:
+        # Add parent directory to path
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        
+        # Check if DeepSkin is installed
+        try:
+            from deepskin import wound_segmentation
+            print("DeepSkin module found.")
+        except ImportError:
+            print("DeepSkin module not found. Installing DeepSkin...")
+            import subprocess
+            import shutil
+            import tempfile
+            
+            # Create external directory if it doesn't exist
+            external_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external')
+            os.makedirs(external_dir, exist_ok=True)
+            
+            # Path for DeepSkin installation
+            deepskin_dir = os.path.join(external_dir, 'Deepskin')
+            
+            # If Deepskin directory exists, remove it to start fresh
+            if os.path.exists(deepskin_dir):
+                print(f"Removing existing DeepSkin directory at {deepskin_dir}")
+                shutil.rmtree(deepskin_dir)
+            
+            # Clone DeepSkin repository
+            print("Cloning DeepSkin repository...")
+            subprocess.run(
+                ["git", "clone", "https://github.com/Nico-Curti/Deepskin.git", deepskin_dir],
+                check=True
+            )
+            
+            # Install requirements and package
+            print("Installing DeepSkin requirements...")
+            # Get the Python executable from the active virtual environment
+            python_executable = sys.executable
+            print(f"Using Python executable: {python_executable}")
+            
+            subprocess.run(
+                [python_executable, "-m", "pip", "install", "-r", os.path.join(deepskin_dir, "requirements.txt")],
+                check=True
+            )
+            
+            print("Installing DeepSkin package...")
+            cwd = os.getcwd()
+            os.chdir(deepskin_dir)
+            subprocess.run([python_executable, "-m", "pip", "install", "."], check=True)
+            os.chdir(cwd)
+            
+            # Import after installation
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+            from deepskin import wound_segmentation
+            print("DeepSkin installed successfully.")
+        
+        folder_path = input_folder
+        output_path = output_folder
+        # Create output directories for mask channels
+        
+
+        for img_name in os.listdir(folder_path):
+            img_path = os.path.join(folder_path, img_name)
+            bgr = cv2.imread(img_path)
+            if bgr is None:
+                print(f"Failed to read image: {img_name}")
+                continue
+
+            # Convert the image from BGR to RGB format
+            rgb = bgr[..., ::-1]
+
+            # Get the wound segmentation mask
+            wound_mask = wound_segmentation(img=rgb)
+
+            # Split the mask into channels (background, tissue, wound)
+            wound_channel = wound_mask[:, :, 0]
+            tissue_channel = wound_mask[:, :, 1]
+            background_channel = wound_mask[:, :, 2]
+
+            
+            combined_mask = np.bitwise_or(wound_channel, tissue_channel)
+            
+            # Save each channel with the same name as the original image
+            cv2.imwrite(os.path.join(output_folder, img_name), combined_mask)
+
+
     else:
         os.makedirs(output_folder, exist_ok=True)
         image_paths = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
@@ -134,29 +233,53 @@ def process_folder(input_folder, output_folder, num_workers=4):
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             executor.map(process_image, image_paths, [output_folder] * len(image_paths))
 
+
+
 def process_image_with_sam2(image_path, checkpoint, model_cfg,  multimask_output=True):
-     # Assume model_cfg has the same base name as checkpoint, but with .yaml extension
-    img= cv2.imread(image_path)
-    model_cfg = model_cfg
+    if not SAM2_AVAILABLE:
+        print("Error: SAM2 is not available. Cannot process image with SAM2.")
+        return None
+        
+    # Assume model_cfg has the same base name as checkpoint, but with .yaml extension
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"Error: Could not read image {image_path}")
+        return None
+        
     if not os.path.exists(model_cfg):
         print(f"Config file not found for checkpoint {checkpoint}: {model_cfg}")
+        return None
+        
     print(f"Using checkpoint: {checkpoint}")
     print(f"Using config: {model_cfg}")
-    predictor = SAM2ImagePredictor(build_sam2(model_cfg, checkpoint))
-
-    points = [[img.shape[1] // 2, img.shape[0] // 2]]
-    input_point = np.array(points, dtype=int)
-    print(input_point)
-    input_label = np.ones(len(input_point), dtype=int)
-    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        predictor.set_image(img)
-        masks, _, _ = predictor.predict(point_coords=input_point,
-                                        point_labels=input_label, multimask_output=multimask_output)
-
-    return masks
+    
+    try:
+        predictor = SAM2ImagePredictor(build_sam2(model_cfg, checkpoint))
+        
+        points = [[img.shape[1] // 2, img.shape[0] // 2]]
+        input_point = np.array(points, dtype=int)
+        print(input_point)
+        input_label = np.ones(len(input_point), dtype=int)
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            predictor.set_image(img)
+            masks, _, _ = predictor.predict(point_coords=input_point,
+                                          point_labels=input_label, multimask_output=multimask_output)
+        return masks
+    except Exception as e:
+        print(f"Error processing image with SAM2: {e}")
+        return None
 
 def process_video_with_sam2(image_folder_path, checkpoint=None, model_cfg=None, input_points=None, interactive=False):
-    from sam2.build_sam import build_sam2_video_predictor
+    if not SAM2_AVAILABLE:
+        print("Error: SAM2 is not available. Cannot process video with SAM2.")
+        return {}
+        
+    try:
+        from sam2.build_sam import build_sam2_video_predictor
+    except ImportError:
+        print("Error: Could not import build_sam2_video_predictor from SAM2.")
+        return {}
+        
     # Set default paths relative to this script's location
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if checkpoint is None:
@@ -246,18 +369,61 @@ def save_masks(result, output_path):
             out_filename = f"{frame_idx + 1:05d}.png"
             out_filepath = os.path.join(output_path, out_filename)
             cv2.imwrite(out_filepath, mask_img)
-            
+        
+def crop_masks(input_folder):
+
+    for filename in os.listdir(input_folder):
+        combined_mask = cv2.imread(os.path.join(input_folder, filename), cv2.IMREAD_GRAYSCALE)   
+        combined_mask_original = combined_mask.copy()     
+        # Create a distance map from the center of the image
+        w, h = combined_mask.shape
+        kernel_size = int(min(w, h) * 0.03)  # 3% of image dimension
+        kernel_size = max(3, kernel_size if kernel_size % 2 == 1 else kernel_size + 1)  # Ensure odd number
+        filled_combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, 
+                                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, ((kernel_size, kernel_size))))
+        
+        plt.figure(figsize=(12, 6))
+        plt.suptitle(f'Processed Mask for {filename}', fontsize=16)
+        plt.imshow(filled_combined_mask, cmap='gray')
+        plt.show()
+        # Apply erosion only to the outer part of the mask
+        kernel_size = int(min(w, h) * 0.06)  # 6% of image dimension
+        kernel_size = max(3, kernel_size if kernel_size % 2 == 1 else kernel_size + 1)  # Ensure odd number
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        
+
+        # Erode outer region
+        eroded_outer = cv2.erode(filled_combined_mask, kernel, iterations=1)
+        
+       
+        
+        # Optional: Perform a closing operation to smooth the mask borders
+        combined_mask_cropped = cv2.morphologyEx(eroded_outer, cv2.MORPH_CLOSE, 
+                                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+        
+       
+        cv2.imwrite(os.path.join(input_folder, filename), combined_mask_cropped)
+        
 if __name__ == '__main__':
     # Your multiprocessing code here
     # Example usage
     
+    USE_SAM2 = False
+    USE_DEEPSKIN = False
+    
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
-    output_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2"
+    img_folder_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Sharp_images"
+    output_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Maske_DeepSkin"
 
 
+    #Masking with SAM2
+    if USE_SAM2:
+        result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=False)
+        save_masks(result, output_path)
+
+    #Masking with DeepSkin
+    if USE_DEEPSKIN:
+        process_folder(img_folder_path, output_path, Use_DeepSkin=True)
     
-    result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=False)
-    save_masks(result, output_path)
-    
+    #crop_masks(output_path)
