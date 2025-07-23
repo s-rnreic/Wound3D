@@ -152,7 +152,7 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None, sharpness_value=50.0)->float:
+def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None, sharpness_value=25)->float:
     global ini_path, database_path , sparse_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
@@ -200,14 +200,14 @@ def main()->None:
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     
     if TEST:
-        video_path = r"C:\Users\Reich\Interface\Videos\Package_Recordings\old_Roll\Roll_Orbit3.mp4"
-        workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\local_sharp"
+        video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
+        workspace_path = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\test\t2"
         trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Mask_Sparse_Dense'
         experiment_description = 'Reco Mandarin Orbit2, 1.0 resize factor, segments = 40, sharpness is calculated for whole image. Masks are applied only for Dense Reconstruction'
     
     
     resize_factor = 1.0
-    segments = 70
+    segments = 50
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
