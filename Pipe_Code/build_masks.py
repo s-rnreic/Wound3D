@@ -382,10 +382,6 @@ def crop_masks(input_folder):
         filled_combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, 
                                         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, ((kernel_size, kernel_size))))
         
-        plt.figure(figsize=(12, 6))
-        plt.suptitle(f'Processed Mask for {filename}', fontsize=16)
-        plt.imshow(filled_combined_mask, cmap='gray')
-        plt.show()
         # Apply erosion only to the outer part of the mask
         kernel_size = int(min(w, h) * 0.06)  # 6% of image dimension
         kernel_size = max(3, kernel_size if kernel_size % 2 == 1 else kernel_size + 1)  # Ensure odd number
@@ -413,8 +409,8 @@ if __name__ == '__main__':
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Sharp_images"
-    output_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Maske_DeepSkin"
+    img_folder_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
+    output_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_DeepSkin"
 
 
     #Masking with SAM2
@@ -426,4 +422,4 @@ if __name__ == '__main__':
     if USE_DEEPSKIN:
         process_folder(img_folder_path, output_path, Use_DeepSkin=True)
     
-    #crop_masks(output_path)
+    crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")
