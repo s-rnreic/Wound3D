@@ -123,7 +123,145 @@ def generate_mask(image_path, blur_ksize=33, exp_factor=20, PLOT=False):
     # mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel
     #                         , iterations=2)
     
-    return mask
+    return mask 
+
+def moving_average_mask(image_folder_path, blur_ksize=33, exp_factor=2, window_size=50, PLOT=False, output_folder=None):
+    """
+    Generate masks for all images in a folder using a moving average threshold for the center circle mean.
+    Additionally, calculate the mean and standard deviation of the ab-channel image for the whole dataset,
+    and compute moving averages for both means and deviations.
+    """
+    import collections
+    import sys
+    if output_folder is not None:
+        os.makedirs(output_folder, exist_ok=True)
+    image_paths = [os.path.join(image_folder_path, f) for f in os.listdir(image_folder_path) if f.endswith(('.jpg', '.png'))]
+    image_paths.sort()  # Ensure consistent order
+    masks = []
+    all_means = []
+    all_devs = []
+    ab_images = []
+    # First pass: calculate all means and deviations for ab-channel images
+    
+    #first image 
+    first_image_path = image_paths[0]
+    image_first = cv2.imread(first_image_path)
+    h, w = image_first.shape[0:2]
+    center_x, center_y = w // 2, h // 2
+    radius = int(0.1 * min(h, w) / 2)
+    y, x = np.ogrid[:h, :w]
+    mask_circle = (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2
+    
+    for image_path in image_paths:
+        image = cv2.imread(image_path)
+        if image is None:
+            all_means.append(np.nan)
+            all_devs.append(np.nan)
+            ab_images.append(None)
+            continue
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        a_channel, b_channel = image[:, :, 1], image[:, :, 2]
+        a_blur = cv2.GaussianBlur(a_channel, (blur_ksize, blur_ksize), 0)
+        b_blur = cv2.GaussianBlur(b_channel, (blur_ksize, blur_ksize), 0)
+        ab_image = np.maximum(a_blur, b_blur)
+        ab_images.append(ab_image)
+        center_mean = np.mean(ab_image[mask_circle])
+        center_dev = np.std(ab_image[mask_circle])
+        all_means.append(center_mean)
+        all_devs.append(center_dev)
+    all_means = np.array(all_means)
+    all_devs = np.array(all_devs)
+    # Compute moving averages
+    mov_avg_means = np.convolve(all_means, np.ones(window_size)/window_size, mode='valid')
+    mov_avg_devs = np.convolve(all_devs, np.ones(window_size)/window_size, mode='valid')
+    # Second pass: generate masks using moving averages
+    
+    if PLOT:
+        import matplotlib.pyplot as plt
+
+        # Plot the means and deviations of the whole dataset
+        plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plt.title("Mean of ab_image (whole dataset)")
+        plt.plot([np.mean(ab[mask_circle]) if ab is not None else np.nan for ab in ab_images], label="Mean (whole image)")
+        plt.xlabel("Image Index")
+        plt.ylabel("Mean Value")
+        plt.legend()
+        plt.grid(True)
+
+        plt.subplot(1, 2, 2)
+        plt.title("StdDev of ab_image (whole dataset)")
+        plt.plot([np.std(ab[mask_circle]) if ab is not None else np.nan for ab in ab_images], label="StdDev (whole image)")
+        plt.xlabel("Image Index")
+        plt.ylabel("StdDev Value")
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.show()
+        
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+
+        # Plot means
+        axs[0].plot(all_means, label='Center Means (per image)')
+        axs[0].plot(np.arange(window_size//2, window_size//2+len(mov_avg_means)), mov_avg_means, label=f'Moving Avg Means (window={window_size})')
+        axs[0].set_xlabel('Image Index')
+        axs[0].set_ylabel('Mean Value')
+        axs[0].set_title('Center Means and Moving Average')
+        axs[0].legend()
+        axs[0].grid(True)
+
+        # Plot deviations
+        axs[1].plot(all_devs, label='Center StdDev (per image)')
+        axs[1].plot(np.arange(window_size//2, window_size//2+len(mov_avg_devs)), mov_avg_devs, label=f'Moving Avg StdDev (window={window_size})')
+        axs[1].set_xlabel('Image Index')
+        axs[1].set_ylabel('StdDev Value')
+        axs[1].set_title('Center StdDev and Moving Average')
+        axs[1].legend()
+        axs[1].grid(True)
+
+        plt.tight_layout()
+        plt.show()
+        #sys.exit(0)
+    
+
+    for idx, ab_image in enumerate(ab_images):
+        if ab_image is None:
+            masks.append(None)
+            continue
+        h, w = ab_image.shape
+        center_x, center_y = w // 2, h // 2
+        radius = int(0.1 * min(h, w) / 2)
+        y, x = np.ogrid[:h, :w]
+        mask_circle = (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2
+        # Use moving average for threshold and deviation (align index for 'valid' mode)
+        mov_idx = min(max(idx - window_size//2, 0), len(mov_avg_means)-1)
+        threshold = mov_avg_means[mov_idx]
+        deviation = 2 * mov_avg_devs[mov_idx]
+        y_idx, x_idx = np.indices((h, w))
+        dist_map = np.sqrt((x_idx - center_x) ** 2 + (y_idx - center_y) ** 2)
+        dist_map = dist_map ** exp_factor
+        dist_map = 1 - (dist_map / np.max(dist_map))
+        weighted_ab = ab_image * dist_map
+        mask = (weighted_ab + deviation > threshold).astype(np.uint8) * 255
+        masks.append(mask)
+        if output_folder is not None:
+            out_path = os.path.join(output_folder, os.path.basename(image_paths[idx]) + '.png')
+            cv2.imwrite(out_path, mask)
+    if PLOT:
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(12, 6))
+        plt.plot(all_means, label='Center Means (per image)')
+        plt.plot(np.arange(window_size//2, window_size//2+len(mov_avg_means)), mov_avg_means, label=f'Moving Avg Means (window={window_size})')
+        plt.plot(all_devs, label='Center StdDev (per image)')
+        plt.plot(np.arange(window_size//2, window_size//2+len(mov_avg_devs)), mov_avg_devs, label=f'Moving Avg StdDev (window={window_size})')
+        plt.xlabel('Image Index')
+        plt.ylabel('Value')
+        plt.title('Center Means/StdDev and Moving Averages')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+    return masks
 
 def process_image(image_path, output_folder):
     mask = generate_mask(image_path)
