@@ -547,8 +547,8 @@ if __name__ == '__main__':
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
-    output_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_DeepSkin"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\Sharp_images"
+    output_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\Maske_CombinedLAB"
 
 
     #Masking with SAM2
@@ -559,5 +559,6 @@ if __name__ == '__main__':
     #Masking with DeepSkin
     if USE_DEEPSKIN:
         process_folder(img_folder_path, output_path, Use_DeepSkin=True)
-    
-    crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")
+    else:
+        process_folder(img_folder_path, output_path, Use_SAM2=USE_SAM2, Use_DeepSkin=USE_DEEPSKIN)
+    #crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")

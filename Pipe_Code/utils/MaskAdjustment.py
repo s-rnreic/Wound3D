@@ -1,5 +1,6 @@
 import os
 import cv2
+from matplotlib import image
 import numpy as np
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
@@ -392,7 +393,7 @@ class MaskAdjustment:
         #plt.savefig(os.path.join(self.output_folder, 'mask_evaluation.png'))
         plt.close()
     
-    def simple_small_mask_adjustment(self, save_adjusted=False):
+    def simple_small_mask_adjustment(self):
         """
         Adjust masks that are too small by applying dilation until they meet the minimum size threshold
         
@@ -452,19 +453,12 @@ class MaskAdjustment:
                 # Update the mask data in our data structure
                 self.mask_data[mask_path] = adjusted_mask
 
-                if save_adjusted:
-                    # Save adjusted mask
-                    mask_filename = Path(mask_path).name
-                    adjusted_path = os.path.join(self.output_folder, f"adjusted_{mask_filename}")
-                    cv2.imwrite(adjusted_path, adjusted_mask)
-                    adjusted_masks[mask_path] = adjusted_path
-                    
                 # Create comparison visualization
                 #self._visualize_adjustment(image, original_mask, adjusted_mask, img_path)
 
         return adjusted_masks
         
-    def perform_preprocessing(self, kernel_size_ratio=0.05, iterations=1, save_adjusted=False, min_solidity=0.8, PLOT=False):
+    def perform_preprocessing(self, kernel_size_ratio=0.05, iterations=1, min_solidity=0.8, PLOT=False):
         """
         Perform morphological opening operation on masks to remove small noise,
         then perform closing if solidity is below threshold.
@@ -605,13 +599,7 @@ class MaskAdjustment:
             
             # Update the mask data in our data structure
             self.mask_data[mask_path] = preprocessed_mask
-            
-            if save_adjusted:
-                # Save preprocessed mask
-                mask_filename = Path(mask_path).name
-                preprocessed_path = os.path.join(self.output_folder, f"preprocessed_{mask_filename}")
-                cv2.imwrite(preprocessed_path, preprocessed_mask)
-                preprocessed_masks[mask_path] = preprocessed_path
+
         
         return preprocessed_masks
         
@@ -698,7 +686,7 @@ class MaskAdjustment:
                     
                     
                     # Create comparison visualization
-                    #self._visualize_adjustment(image, original_mask, adjusted_mask, img_path)
+                    self._visualize_adjustment(image, original_mask, adjusted_mask, img_path)
         
         return adjusted_masks
     
@@ -923,7 +911,8 @@ class MaskAdjustment:
                         binary_mask = cv2.erode(binary_mask, erosion_kernel, iterations=1)
                 
                 iteration += 1
-        
+            
+
         return binary_mask
     
     def _visualize_adjustment(self, image, original_mask, adjusted_mask, img_path):
@@ -1040,9 +1029,9 @@ class MaskAdjustment:
 
 if __name__ == "__main__":
     # Example usage
-    image_folder = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\Sharp_images"
-    mask_folder = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\Maske_CombinedLAB"
-    output_folder = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\CombinedLAB_Eval"
+    image_folder = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Sharp_images"
+    mask_folder = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Maske_CombinedLAB"
+    output_folder = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\CombinedLAB_Eval"
 
     # Create MaskAdjustment instance
     mask_adjuster = MaskAdjustment(image_folder, mask_folder, output_folder)
@@ -1052,11 +1041,75 @@ if __name__ == "__main__":
     
     mask_adjuster.perform_preprocessing(min_solidity=0.7)
 
+    # Visualize mask areas after preprocessing, highlighting invalid ones
+    plt.figure(figsize=(12, 6))
+    
+    # Get mask data in sequence order
+    areas = []
+    statuses = []
+    
+    for img_path in mask_adjuster.sorted_images:
+        if img_path in mask_adjuster.mask_properties:
+            props = mask_adjuster.mask_properties[img_path]
+            areas.append(props['area_ratio'])
+            statuses.append(props['is_valid'])
+    
+    # Plot areas with different colors for valid and invalid
+    valid_indices = [i for i, valid in enumerate(statuses) if valid]
+    invalid_indices = [i for i, valid in enumerate(statuses) if not valid]
+    
+    plt.scatter(valid_indices, [areas[i] for i in valid_indices], c='g', label='Valid Masks')
+    plt.scatter(invalid_indices, [areas[i] for i in invalid_indices], c='r', label='Invalid Masks')
+    
+    # Add horizontal lines for thresholds
+    plt.axhline(y=mask_adjuster.min_mask_ratio, color='r', linestyle='--', 
+                label=f'Min Threshold ({mask_adjuster.min_mask_ratio})')
+    plt.axhline(y=mask_adjuster.max_mask_ratio, color='r', linestyle='--', 
+                label=f'Max Threshold ({mask_adjuster.max_mask_ratio})')
+    
+    plt.title('Mask Area Ratios After Preprocessing')
+    plt.xlabel('Image Index')
+    plt.ylabel('Area Ratio')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
     # Adjust small masks
     print("Adjusting small masks by making them at least big enough to pass the 10% threshold...")
     mask_adjuster.simple_small_mask_adjustment()
 
-
+# Visualize mask areas after preprocessing, highlighting invalid ones
+    plt.figure(figsize=(12, 6))
+    
+    # Get mask data in sequence order
+    areas = []
+    statuses = []
+    
+    for img_path in mask_adjuster.sorted_images:
+        if img_path in mask_adjuster.mask_properties:
+            props = mask_adjuster.mask_properties[img_path]
+            areas.append(props['area_ratio'])
+            statuses.append(props['is_valid'])
+    
+    # Plot areas with different colors for valid and invalid
+    valid_indices = [i for i, valid in enumerate(statuses) if valid]
+    invalid_indices = [i for i, valid in enumerate(statuses) if not valid]
+    
+    plt.scatter(valid_indices, [areas[i] for i in valid_indices], c='g', label='Valid Masks')
+    plt.scatter(invalid_indices, [areas[i] for i in invalid_indices], c='r', label='Invalid Masks')
+    
+    # Add horizontal lines for thresholds
+    plt.axhline(y=mask_adjuster.min_mask_ratio, color='r', linestyle='--', 
+                label=f'Min Threshold ({mask_adjuster.min_mask_ratio})')
+    plt.axhline(y=mask_adjuster.max_mask_ratio, color='r', linestyle='--', 
+                label=f'Max Threshold ({mask_adjuster.max_mask_ratio})')
+    
+    plt.title('Mask Area Ratios After Small Mask Adjustment')
+    plt.xlabel('Image Index')
+    plt.ylabel('Area Ratio')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
     
     # Evaluate masks
     valid_masks, invalid_masks = mask_adjuster.evaluate_masks()
@@ -1067,8 +1120,41 @@ if __name__ == "__main__":
     print(f"Adjusted {len(adjusted_masks)} masks")
 
     # Save all Masks
-    mask_adjuster._save_all_masks()
+    #mask_adjuster._save_all_masks()
 
+    # Visualize mask areas after preprocessing, highlighting invalid ones
+    plt.figure(figsize=(12, 6))
+    
+    # Get mask data in sequence order
+    areas = []
+    statuses = []
+    
+    for img_path in mask_adjuster.sorted_images:
+        if img_path in mask_adjuster.mask_properties:
+            props = mask_adjuster.mask_properties[img_path]
+            areas.append(props['area_ratio'])
+            statuses.append(props['is_valid'])
+    
+    # Plot areas with different colors for valid and invalid
+    valid_indices = [i for i, valid in enumerate(statuses) if valid]
+    invalid_indices = [i for i, valid in enumerate(statuses) if not valid]
+    
+    plt.scatter(valid_indices, [areas[i] for i in valid_indices], c='g', label='Valid Masks')
+    plt.scatter(invalid_indices, [areas[i] for i in invalid_indices], c='r', label='Invalid Masks')
+    
+    # Add horizontal lines for thresholds
+    plt.axhline(y=mask_adjuster.min_mask_ratio, color='r', linestyle='--', 
+                label=f'Min Threshold ({mask_adjuster.min_mask_ratio})')
+    plt.axhline(y=mask_adjuster.max_mask_ratio, color='r', linestyle='--', 
+                label=f'Max Threshold ({mask_adjuster.max_mask_ratio})')
+    
+    plt.title('Mask Area Ratios After mask interpolation')
+    plt.xlabel('Image Index')
+    plt.ylabel('Area Ratio')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+    
     # Optional: Clear image data from memory if no longer needed
     print("Freeing memory...")
     mask_adjuster.image_data.clear()
