@@ -11,7 +11,7 @@ from run_command import run_command
 import build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
-from read_write_model import write_model
+from Pipe_Code.utils.read_write_model import write_model
 import MVS_Meshing as mvs
 from itertools import product
 # user inserts a input_path and a workspace_path
@@ -141,6 +141,7 @@ def MVS(workspace_path:str, log_file:str)->None:
     
     elapse_time= mvs.execute_dense_reconstruction(workspace_path)
     log_time(log_file, "MVS", elapse_time)
+    
 
 
 def Meshing(workspace_path:str, log_file:str)->None:
