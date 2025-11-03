@@ -131,7 +131,7 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=False):
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True):
 
     if Use_SAM2:
         
