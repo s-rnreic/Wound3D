@@ -646,9 +646,7 @@ class WoundModel3D:
         
         # Camera and image management
         self.spectators = {}  # Dict: image_name -> Spectator object
-        # self.cameras = {}  # COLMAP cameras dict
-        # self.images = {}  # COLMAP images dict
-        
+  
         # Global point tracking
         self.point_visibility_count = {}  # point_index -> number of cameras seeing it
         self.wound_points_global = set()  # All points visible through at least one mask
