@@ -131,7 +131,7 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=False):
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True):
 
     if Use_SAM2:
         
@@ -223,7 +223,7 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             combined_mask = np.bitwise_or(wound_channel, tissue_channel)
             
             # Save each channel with the same name as the original image
-            cv2.imwrite(os.path.join(output_folder, img_name), combined_mask)
+            cv2.imwrite(os.path.join(output_folder, img_name + ".png"), combined_mask)
 
 
     else:

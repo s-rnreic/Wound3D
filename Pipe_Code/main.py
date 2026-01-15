@@ -53,7 +53,7 @@ def create_workspace(workspace_path:str)->None:
     sharp_image_path = os.path.join(workspace_path, 'sharp_images')
     os.makedirs(sharp_image_path, exist_ok=True)
     image_mask_path=os.path.join(workspace_path, 'masks')
-    
+    os.makedirs(image_mask_path, exist_ok=True)
 
 
 
