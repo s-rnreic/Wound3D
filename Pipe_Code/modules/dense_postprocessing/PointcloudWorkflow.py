@@ -320,6 +320,139 @@ def process_pointcloud(dense_model_path: Path,
     return sampled_pcd
 
 
+def execute_dense_postprocessing(
+    dense_model_path: Path,
+    output_path: Path = None,
+    radial_percentile: float = 0.75,
+    target_points: int = 100000,
+    SOR_std: float = None,
+    SOR_n: int = None,
+    use_pointcleannet: bool = False,
+    pointcleannet_denoise: bool = True,
+    pointcleannet_outliers: bool = False,
+    denoise_iterations: int = 1,
+    outlier_threshold: float = 0.5,
+    n_neighbours: int = 100
+):
+    """
+    Execute complete dense postprocessing workflow.
+    
+    Combines process_pointcloud with optional PointCleanNet denoising/outlier removal.
+    
+    Args:
+        dense_model_path: Path to COLMAP dense model directory (contains fused.ply)
+        output_path: Path to save final PLY file. If None, saves to dense_model_path/processed_pointcloud.ply
+        radial_percentile: Keep this fraction of points (closest to camera focus)
+        target_points: Target number of points after FPS sampling
+        SOR_std: Standard deviation for Statistical Outlier Removal (None to skip)
+        SOR_n: Number of neighbors for SOR (None to skip)
+        use_pointcleannet: Whether to apply PointCleanNet processing
+        pointcleannet_denoise: Apply PointCleanNet denoising (requires use_pointcleannet=True)
+        pointcleannet_outliers: Apply PointCleanNet outlier removal (requires use_pointcleannet=True)
+        denoise_iterations: Number of denoising iterations for PointCleanNet
+        outlier_threshold: Threshold for PointCleanNet outlier classification (0-1)
+        n_neighbours: Number of neighbors for PointCleanNet smoothing
+        
+    Returns:
+        Path to the final output file
+    """
+    import time
+    start_time = time.time()
+    
+    dense_model_path = Path(dense_model_path)
+    
+    # Set default output path
+    if output_path is None:
+        output_path = dense_model_path / "processed_pointcloud.ply"
+    else:
+        output_path = Path(output_path)
+    
+    print("=" * 60)
+    print("DENSE POSTPROCESSING WORKFLOW")
+    print("=" * 60)
+    print(f"  Input: {dense_model_path}")
+    print(f"  Output: {output_path}")
+    print(f"  PointCleanNet: {'Enabled' if use_pointcleannet else 'Disabled'}")
+    if use_pointcleannet:
+        print(f"    - Denoise: {pointcleannet_denoise} ({denoise_iterations} iterations)")
+        print(f"    - Outlier removal: {pointcleannet_outliers} (threshold: {outlier_threshold})")
+    print("=" * 60)
+    
+    # Step 1: Run process_pointcloud (radial filter + FPS + optional SOR)
+    intermediate_path = output_path if not use_pointcleannet else dense_model_path / "intermediate_processed.ply"
+    
+    process_pointcloud(
+        dense_model_path=dense_model_path,
+        output_path=intermediate_path,
+        radial_percentile=radial_percentile,
+        target_points=target_points,
+        SOR_std=SOR_std,
+        SOR_n=SOR_n
+    )
+    
+    # Step 2: Optional PointCleanNet processing
+    if use_pointcleannet:
+        print("\n" + "=" * 60)
+        print("POINTCLEANNET PROCESSING")
+        print("=" * 60)
+        
+        try:
+            from Pipe_Code.modules.dense_postprocessing.PointCleanNet import (
+                denoise_pointcloud, 
+                remove_outliers, 
+                clean_pointcloud
+            )
+        except ImportError:
+            # Try relative import
+            from PointCleanNet import denoise_pointcloud, remove_outliers, clean_pointcloud
+        
+        current_input = intermediate_path
+        
+        if pointcleannet_outliers and pointcleannet_denoise:
+            # Run combined cleaning
+            print("\n--- Running PointCleanNet: Outlier Removal + Denoising ---")
+            clean_pointcloud(
+                input_ply=str(current_input),
+                output_ply=str(output_path),
+                denoise=True,
+                remove_outliers_flag=True,
+                num_iterations=denoise_iterations,
+                outlier_threshold=outlier_threshold
+            )
+        elif pointcleannet_outliers:
+            # Run outlier removal only
+            print("\n--- Running PointCleanNet: Outlier Removal ---")
+            remove_outliers(
+                input_ply=str(current_input),
+                output_ply=str(output_path),
+                threshold=outlier_threshold
+            )
+        elif pointcleannet_denoise:
+            # Run denoising only
+            print("\n--- Running PointCleanNet: Denoising ---")
+            denoise_pointcloud(
+                input_ply=str(current_input),
+                output_ply=str(output_path),
+                num_iterations=denoise_iterations,
+                n_neighbours=n_neighbours
+            )
+        
+        # Clean up intermediate file
+        if intermediate_path != output_path and intermediate_path.exists():
+            intermediate_path.unlink()
+            print(f"  Cleaned up intermediate file: {intermediate_path}")
+    
+    elapsed_time = time.time() - start_time
+    
+    print("\n" + "=" * 60)
+    print("DENSE POSTPROCESSING COMPLETE")
+    print("=" * 60)
+    print(f"  Total time: {elapsed_time:.2f} seconds")
+    print(f"  Output saved to: {output_path}")
+    
+    return output_path, elapsed_time
+
+
 if __name__ == "__main__":
     # Configuration
     dense_model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\dense")
