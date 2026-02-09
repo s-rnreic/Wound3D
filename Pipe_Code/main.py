@@ -1,17 +1,25 @@
 import sys
 import os
+
+# Add workspace root to path for Pipe_Code imports
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_workspace_root = os.path.abspath(os.path.join(_current_dir, '..'))
+if _workspace_root not in sys.path:
+    sys.path.insert(0, _workspace_root)
+
 import prepare_vid_for_colmap_v5
 import create_temp_project_ini as ctpi
 import create_temp_glomap_ini as ctgi
 import sfm_database
 import subprocess
 from run_command import run_command
+from pathlib import Path
 # import tkinter as tk
 # from tkinter import filedialog, simpledialog  # Add simpledialog for user input
 import build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
-from read_write_model import write_model
+from Pipe_Code.utils.read_write_model import write_model
 import MVS_Meshing as mvs
 from itertools import product
 # user inserts a input_path and a workspace_path
@@ -53,7 +61,7 @@ def create_workspace(workspace_path:str)->None:
     sharp_image_path = os.path.join(workspace_path, 'sharp_images')
     os.makedirs(sharp_image_path, exist_ok=True)
     image_mask_path=os.path.join(workspace_path, 'masks')
-    
+    os.makedirs(image_mask_path, exist_ok=True)
 
 
 
@@ -141,10 +149,32 @@ def MVS(workspace_path:str, log_file:str)->None:
     
     elapse_time= mvs.execute_dense_reconstruction(workspace_path)
     log_time(log_file, "MVS", elapse_time)
+    
+def DensePostProcessing(workspace_path:str, log_file:str, use_pointcleannet:bool=False)->Path:
+    from Pipe_Code.modules.dense_postprocessing.PointcloudWorkflow import execute_dense_postprocessing
 
+    
+    dense_path = Path(workspace_path) / "dense"
+    output_path = dense_path / "processed_pointcloud2.ply"
+    
+    _, elapse_time = execute_dense_postprocessing(
+        dense_model_path=dense_path,
+        output_path=output_path,
+        radial_percentile=0.75,
+        target_points=100000,
+        SOR_std=1.5,
+        SOR_n=10,
+        use_pointcleannet=use_pointcleannet,
+        pointcleannet_denoise=False,
+        pointcleannet_outliers=False,
+        denoise_iterations=1
+    )
+    log_time(log_file, "DensePostProcessing", elapse_time)
+    
+    return output_path
 
-def Meshing(workspace_path:str, log_file:str)->None:
-    elapse_time= mvs.execute_poisson_meshing(workspace_path)
+def Meshing(workspace_path:str, log_file:str, processed_pointcloud_path: Path)->None:
+    elapse_time= mvs.execute_poisson_meshing(workspace_path, input_ply=str(processed_pointcloud_path))
     log_time(log_file, "Meshing", elapse_time)
 
 def open_ini_in_editor(ini_path: str) -> None:
@@ -164,30 +194,32 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True)
+    # Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True)
 
-    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    # COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    sparse_path = os.path.join(workspace_path, 'sparse')
-    os.makedirs(sparse_path, exist_ok=True)
-    glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
-    ctgi.create_glomap_ini(glomap_ini_path)
+    # sparse_path = os.path.join(workspace_path, 'sparse')
+    # os.makedirs(sparse_path, exist_ok=True)
+    # glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
+    # ctgi.create_glomap_ini(glomap_ini_path)
 
-    if custom_parameters:
-        for header, param, value in custom_parameters:
-            ctpi.insert_keywords_to_project_ini(glomap_ini_path, header, param, str(value))
+    # if custom_parameters:
+    #     for header, param, value in custom_parameters:
+    #         ctpi.insert_keywords_to_project_ini(glomap_ini_path, header, param, str(value))
 
-    GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
+    # GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
 
-    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    # ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    # cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
     #write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
-    MVS(workspace_path, log_file)
+    #MVS(workspace_path, log_file)
     
-    Meshing(workspace_path, log_file)
+    processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
+    
+    Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
     
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
@@ -203,11 +235,11 @@ def main()->None:
         video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
         workspace_path = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\test\t2"
         trial_database_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Mask_Sparse_Dense'
-        experiment_description = 'Reco Mandarin Orbit2, 1.0 resize factor, segments = 40, sharpness is calculated for whole image. Masks are applied only for Dense Reconstruction'
+        experiment_description = 'Reco Mandarin Orbit2, 1.0 resize factor, segments = 20, sharpness is calculated for whole image. Masks are applied only for Dense Reconstruction'
     
     
     resize_factor = 1.0
-    segments = 50
+    segments = 20
     image_options = {
         'reduce_size': resize_factor,
         #'square_crop': True,
@@ -226,6 +258,6 @@ if __name__ == '__main__':
     video_path = r"c:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
     workspace_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
-    segments = [50]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
+    segments = [20]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
    
     run_colmap_process(video_path, segments[0], {'reduce_size': resize_factor[0]}, enhance_option=None, custom_parameters=None, sharpness_value=25.0)
