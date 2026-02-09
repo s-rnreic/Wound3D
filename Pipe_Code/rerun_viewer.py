@@ -16,7 +16,7 @@ import rerun as rr  # pip install rerun-sdk
 from tqdm import tqdm
 import sys
 sys.path.append('C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\external')  # Add this line
-from read_write_model import Camera, read_model  # type: ignore[attr-defined]
+from Pipe_Code.utils.read_write_model import Camera, read_model  # type: ignore[attr-defined]
 import matplotlib.pyplot as plt
 
 FILTER_MIN_VISIBLE: Final = 500

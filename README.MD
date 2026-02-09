@@ -23,6 +23,10 @@ It provides a structured workflow for key steps such as feature extraction, matc
     ```
     Refer to the [SAM2 GitHub repository](https://github.com/facebookresearch/sam2?tab=readme-ov-file) for additional setup instructions.
 
+1. **Video Analysis/Processing**
+    - `video_edit.py`: Decomposes video into images and selects images based on sharpness and equidistance.
+    - `mask_edit.py`: Automatically creates masks using thresholding.
+        - Optional: Use Retinex or other color homogenization techniques.
 
 2. **COLMAP/SFM Pipeline**
     - Parameters can be specified through a project file.
@@ -79,9 +83,24 @@ It provides a structured workflow for key steps such as feature extraction, matc
 
 <img src="git_images/poisson_mesh.png" width="700">
 
+3. **Post-Processing**
+    - Possibly filter backgrounds, outstanding edges, etc.
 
 ### Features of the Glomap Pipeline in `main.py`
 
+- **User Input**: Allows user to input video path and workspace path.
+- **Workspace Creation**: Creates a structured workspace directory with subfolders for raw images, sharp images, masks, sparse, and dense data.
+- **Video Pipeline**: 
+    - Extracts images from video.
+    - Selects sharp and equidistant images.
+    - Optionally processes images to create masks.
+- **COLMAP Pipeline**:
+    - Executes COLMAP commands for feature extraction, feature matching, and mapping using temporary project files.
+    - Appends the data from temporary project files to a total project file (`total_project.ini`).
+- **Analysis**: Analyzes the output of the COLMAP pipeline.
+- **Rerun Streaming**: Reruns the COLMAP pipeline for visualization.
+- **Timing Analysis**: Logs the elapsed time for each step of the pipeline and calculates the total elapsed time.
+- **Database Integration**: Loads existing experiments into a database with details such as experiment description, project file, cameras, images, 3D points, observations, mean reprojection error, mean track length, mean observations per image, resize factor, fraction of images, and elapsed time.
 
 - **User Input**: Allows user to input video path and workspace path.
 - **Workspace Creation**: Creates a structured workspace directory with subfolders for raw images, sharp images, masks, sparse, and dense data.

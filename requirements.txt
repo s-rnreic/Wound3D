@@ -11,3 +11,6 @@ trimesh
 scikit-image
 torch>=2.5.1
 torchvision>=0.20.1
+open3d
+scikit-learn
+pathlib

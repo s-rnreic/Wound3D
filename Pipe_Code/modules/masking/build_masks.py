@@ -123,7 +123,145 @@ def generate_mask(image_path, blur_ksize=33, exp_factor=20, PLOT=False):
     # mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel
     #                         , iterations=2)
     
-    return mask
+    return mask 
+
+def moving_average_mask(image_folder_path, blur_ksize=33, exp_factor=2, window_size=50, PLOT=False, output_folder=None):
+    """
+    Generate masks for all images in a folder using a moving average threshold for the center circle mean.
+    Additionally, calculate the mean and standard deviation of the ab-channel image for the whole dataset,
+    and compute moving averages for both means and deviations.
+    """
+    import collections
+    import sys
+    if output_folder is not None:
+        os.makedirs(output_folder, exist_ok=True)
+    image_paths = [os.path.join(image_folder_path, f) for f in os.listdir(image_folder_path) if f.endswith(('.jpg', '.png'))]
+    image_paths.sort()  # Ensure consistent order
+    masks = []
+    all_means = []
+    all_devs = []
+    ab_images = []
+    # First pass: calculate all means and deviations for ab-channel images
+    
+    #first image 
+    first_image_path = image_paths[0]
+    image_first = cv2.imread(first_image_path)
+    h, w = image_first.shape[0:2]
+    center_x, center_y = w // 2, h // 2
+    radius = int(0.1 * min(h, w) / 2)
+    y, x = np.ogrid[:h, :w]
+    mask_circle = (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2
+    
+    for image_path in image_paths:
+        image = cv2.imread(image_path)
+        if image is None:
+            all_means.append(np.nan)
+            all_devs.append(np.nan)
+            ab_images.append(None)
+            continue
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        a_channel, b_channel = image[:, :, 1], image[:, :, 2]
+        a_blur = cv2.GaussianBlur(a_channel, (blur_ksize, blur_ksize), 0)
+        b_blur = cv2.GaussianBlur(b_channel, (blur_ksize, blur_ksize), 0)
+        ab_image = np.maximum(a_blur, b_blur)
+        ab_images.append(ab_image)
+        center_mean = np.mean(ab_image[mask_circle])
+        center_dev = np.std(ab_image[mask_circle])
+        all_means.append(center_mean)
+        all_devs.append(center_dev)
+    all_means = np.array(all_means)
+    all_devs = np.array(all_devs)
+    # Compute moving averages
+    mov_avg_means = np.convolve(all_means, np.ones(window_size)/window_size, mode='valid')
+    mov_avg_devs = np.convolve(all_devs, np.ones(window_size)/window_size, mode='valid')
+    # Second pass: generate masks using moving averages
+    
+    if PLOT:
+        import matplotlib.pyplot as plt
+
+        # Plot the means and deviations of the whole dataset
+        plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plt.title("Mean of ab_image (whole dataset)")
+        plt.plot([np.mean(ab[mask_circle]) if ab is not None else np.nan for ab in ab_images], label="Mean (whole image)")
+        plt.xlabel("Image Index")
+        plt.ylabel("Mean Value")
+        plt.legend()
+        plt.grid(True)
+
+        plt.subplot(1, 2, 2)
+        plt.title("StdDev of ab_image (whole dataset)")
+        plt.plot([np.std(ab[mask_circle]) if ab is not None else np.nan for ab in ab_images], label="StdDev (whole image)")
+        plt.xlabel("Image Index")
+        plt.ylabel("StdDev Value")
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.show()
+        
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+
+        # Plot means
+        axs[0].plot(all_means, label='Center Means (per image)')
+        axs[0].plot(np.arange(window_size//2, window_size//2+len(mov_avg_means)), mov_avg_means, label=f'Moving Avg Means (window={window_size})')
+        axs[0].set_xlabel('Image Index')
+        axs[0].set_ylabel('Mean Value')
+        axs[0].set_title('Center Means and Moving Average')
+        axs[0].legend()
+        axs[0].grid(True)
+
+        # Plot deviations
+        axs[1].plot(all_devs, label='Center StdDev (per image)')
+        axs[1].plot(np.arange(window_size//2, window_size//2+len(mov_avg_devs)), mov_avg_devs, label=f'Moving Avg StdDev (window={window_size})')
+        axs[1].set_xlabel('Image Index')
+        axs[1].set_ylabel('StdDev Value')
+        axs[1].set_title('Center StdDev and Moving Average')
+        axs[1].legend()
+        axs[1].grid(True)
+
+        plt.tight_layout()
+        plt.show()
+        #sys.exit(0)
+    
+
+    for idx, ab_image in enumerate(ab_images):
+        if ab_image is None:
+            masks.append(None)
+            continue
+        h, w = ab_image.shape
+        center_x, center_y = w // 2, h // 2
+        radius = int(0.1 * min(h, w) / 2)
+        y, x = np.ogrid[:h, :w]
+        mask_circle = (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2
+        # Use moving average for threshold and deviation (align index for 'valid' mode)
+        mov_idx = min(max(idx - window_size//2, 0), len(mov_avg_means)-1)
+        threshold = mov_avg_means[mov_idx]
+        deviation = 2 * mov_avg_devs[mov_idx]
+        y_idx, x_idx = np.indices((h, w))
+        dist_map = np.sqrt((x_idx - center_x) ** 2 + (y_idx - center_y) ** 2)
+        dist_map = dist_map ** exp_factor
+        dist_map = 1 - (dist_map / np.max(dist_map))
+        weighted_ab = ab_image * dist_map
+        mask = (weighted_ab + deviation > threshold).astype(np.uint8) * 255
+        masks.append(mask)
+        if output_folder is not None:
+            out_path = os.path.join(output_folder, os.path.basename(image_paths[idx]) + '.png')
+            cv2.imwrite(out_path, mask)
+    if PLOT:
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(12, 6))
+        plt.plot(all_means, label='Center Means (per image)')
+        plt.plot(np.arange(window_size//2, window_size//2+len(mov_avg_means)), mov_avg_means, label=f'Moving Avg Means (window={window_size})')
+        plt.plot(all_devs, label='Center StdDev (per image)')
+        plt.plot(np.arange(window_size//2, window_size//2+len(mov_avg_devs)), mov_avg_devs, label=f'Moving Avg StdDev (window={window_size})')
+        plt.xlabel('Image Index')
+        plt.ylabel('Value')
+        plt.title('Center Means/StdDev and Moving Averages')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+    return masks
 
 def process_image(image_path, output_folder):
     mask = generate_mask(image_path)
@@ -131,7 +269,29 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True):
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True, use_mask_adjustment=False, 
+                   min_mask_ratio=0.1, max_mask_ratio=0.8, neighbors_count=3):
+    """
+    Process a folder of images to generate segmentation masks.
+    
+    Args:
+        input_folder (str): Path to folder containing input images
+        output_folder (str): Path to folder for saving masks (wound+tissue combined)
+        num_workers (int): Number of parallel workers (for non-DeepSkin methods)
+        Use_SAM2 (bool): Use SAM2 for segmentation
+        Use_DeepSkin (bool): Use DeepSkin for wound segmentation (default: True)
+        use_mask_adjustment (bool): Apply mask adjustment workflow after segmentation
+        min_mask_ratio (float): Minimum acceptable mask area ratio (default: 0.1)
+        max_mask_ratio (float): Maximum acceptable mask area ratio (default: 0.8)
+        neighbors_count (int): Number of neighbors for mask adjustment (default: 3)
+    
+    When Use_DeepSkin=True, creates:
+        - {output_folder}: wound+tissue combined masks
+        - {output_folder}/../masks_wound_only: wound-only masks
+    
+    Example:
+        process_folder('images/', 'masks/', Use_DeepSkin=True, use_mask_adjustment=True)
+    """
 
     if Use_SAM2:
         
@@ -142,21 +302,28 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         return
     
     elif Use_DeepSkin:
-        # Add parent directory to path
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        # Add the current directory to sys.path to import the wrapper
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
         
         # Check if DeepSkin is installed
         try:
-            from deepskin import wound_segmentation
+            from deepskin import wound_segmentation as _original_wound_segmentation
+            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
+            from deepskin_wrapper import wound_segmentation
             print("DeepSkin module found.")
         except ImportError:
             print("DeepSkin module not found. Installing DeepSkin...")
             import subprocess
             import shutil
             import tempfile
+            import stat
             
             # Create external directory if it doesn't exist
-            external_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external')
+            # Go up from Pipe_Code/modules/masking to COLMAP_Pipline root
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            external_dir = os.path.join(root_dir, 'external')
             os.makedirs(external_dir, exist_ok=True)
             
             # Path for DeepSkin installation
@@ -165,7 +332,17 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             # If Deepskin directory exists, remove it to start fresh
             if os.path.exists(deepskin_dir):
                 print(f"Removing existing DeepSkin directory at {deepskin_dir}")
-                shutil.rmtree(deepskin_dir)
+                
+                # Helper function to handle Windows permission errors
+                def handle_remove_readonly(func, path, exc):
+                    """Handle permission errors on Windows when deleting git files"""
+                    if not os.access(path, os.W_OK):
+                        os.chmod(path, stat.S_IWUSR)
+                        func(path)
+                    else:
+                        raise
+                
+                shutil.rmtree(deepskin_dir, onerror=handle_remove_readonly)
             
             # Clone DeepSkin repository
             print("Cloning DeepSkin repository...")
@@ -192,14 +369,18 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             os.chdir(cwd)
             
             # Import after installation
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-            from deepskin import wound_segmentation
+            from deepskin import wound_segmentation as _original_wound_segmentation
+            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
+            from deepskin_wrapper import wound_segmentation
             print("DeepSkin installed successfully.")
         
         folder_path = input_folder
         output_path = output_folder
         # Create output directories for mask channels
-        
+        wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_wound_only')
+        wound_tissue_folder = output_folder  # wound + tissue combined
+        os.makedirs(wound_only_folder, exist_ok=True)
+        os.makedirs(wound_tissue_folder, exist_ok=True)
 
         for img_name in os.listdir(folder_path):
             img_path = os.path.join(folder_path, img_name)
@@ -219,11 +400,50 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             tissue_channel = wound_mask[:, :, 1]
             background_channel = wound_mask[:, :, 2]
 
-            
+            # Create combined wound+tissue mask
             combined_mask = np.bitwise_or(wound_channel, tissue_channel)
             
-            # Save each channel with the same name as the original image
-            cv2.imwrite(os.path.join(output_folder, img_name + ".png"), combined_mask)
+            # Save wound-only mask
+            cv2.imwrite(os.path.join(wound_only_folder, img_name + ".png"), wound_channel)
+            
+            # Save wound+tissue combined mask
+            cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
+        
+        # Apply mask adjustment if requested
+        if use_mask_adjustment:
+            print("\n" + "="*60)
+            print("Applying Mask Adjustment Workflow")
+            print("="*60)
+            
+            # Import MaskAdjustment
+            from MaskAdjustment import MaskAdjustment
+            
+            # Apply to wound+tissue masks
+            print("\nAdjusting wound+tissue masks...")
+            mask_adjuster = MaskAdjustment(
+                folder_path, 
+                wound_tissue_folder, 
+                wound_tissue_folder,  # Output to same folder
+                min_mask_ratio=min_mask_ratio,
+                max_mask_ratio=max_mask_ratio,
+                neighbors_count=neighbors_count
+            )
+            
+            # Preprocess masks
+            mask_adjuster.perform_preprocessing(min_solidity=0.7)
+            
+            # Adjust small masks
+            mask_adjuster.simple_small_mask_adjustment()
+            
+            # Evaluate and adjust invalid masks
+            mask_adjuster.evaluate_masks(visualize=False)
+            mask_adjuster.adjust_masks(save_adjusted=False)
+            
+            # Save adjusted masks
+            mask_adjuster._save_all_masks()
+            
+            print("Mask adjustment complete!")
+
 
 
     else:
@@ -405,12 +625,12 @@ if __name__ == '__main__':
     # Example usage
     
     USE_SAM2 = False
-    USE_DEEPSKIN = False
+    USE_DEEPSKIN = True
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
-    output_path = r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_DeepSkin"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2\sharp_images"
+    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2\masks"
 
 
     #Masking with SAM2
@@ -420,6 +640,7 @@ if __name__ == '__main__':
 
     #Masking with DeepSkin
     if USE_DEEPSKIN:
-        process_folder(img_folder_path, output_path, Use_DeepSkin=True)
-    
-    crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")
+        process_folder(img_folder_path, output_path, Use_DeepSkin=True, use_mask_adjustment=True)
+    else:
+        process_folder(img_folder_path, output_path, Use_SAM2=USE_SAM2, Use_DeepSkin=USE_DEEPSKIN)
+    #crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")

@@ -6,7 +6,7 @@ import shutil
 import trimesh
 from run_command import run_command
 
-def execute_poisson_meshing(folder_path):
+def execute_poisson_meshing(folder_path, input_ply=None):
     dataset_path = os.path.abspath(folder_path)
     dense_path = os.path.join(dataset_path, 'dense')
     
@@ -19,7 +19,8 @@ def execute_poisson_meshing(folder_path):
     
     try:
         # Run poisson meshing
-        run_command(f"colmap poisson_mesher --input_path '{os.path.join(dense_path, 'fused.ply')}' --output_path '{os.path.join(dense_path, 'poisson.ply')}' --PoissonMeshing.trim 7")
+        input_path = input_ply if input_ply is not None else os.path.join(dense_path, 'fused.ply')
+        run_command(f"colmap poisson_mesher --input_path '{input_path}' --output_path '{os.path.join(dense_path, 'poisson.ply')}' --PoissonMeshing.trim 3")
     except Exception as e:
         print("Poisson meshing failed: ", e)
         return
