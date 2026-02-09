@@ -399,7 +399,7 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             
             # Import MaskAdjustment
             sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
-            from MaskAdjustment import MaskAdjustment
+            from .MaskAdjustment import MaskAdjustment
             
             # Apply to wound+tissue masks
             print("\nAdjusting wound+tissue masks...")

@@ -6,7 +6,7 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from collections import deque
 import math
-from findMasks import find_corresponding_masks
+from Pipe_Code.modules.masking.findMasks import find_corresponding_masks
 from pathlib import Path
 from tqdm import tqdm  # For progress display during loading
 

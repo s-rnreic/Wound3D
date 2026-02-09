@@ -575,7 +575,7 @@ def main():
 
 
 if __name__ == "__main__":
-    from build_masks import process_folder
+    from Pipe_Code.modules.masking.build_masks import process_folder
     #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
     video_path=r"c:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit2.mp4"
     base_dir = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine"

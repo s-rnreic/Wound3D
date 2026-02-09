@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from findMasks import find_corresponding_masks
+from Pipe_Code.modules.masking.findMasks import find_corresponding_masks
 
 
 class ExtendedWoundMaskCreator:

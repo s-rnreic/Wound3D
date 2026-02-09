@@ -16,7 +16,7 @@ from run_command import run_command
 from pathlib import Path
 # import tkinter as tk
 # from tkinter import filedialog, simpledialog  # Add simpledialog for user input
-import build_masks as masking
+import Pipe_Code.modules.masking.build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
 from Pipe_Code.utils.read_write_model import write_model
@@ -202,28 +202,28 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=True)
 
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    # sparse_path = os.path.join(workspace_path, 'sparse')
-    # os.makedirs(sparse_path, exist_ok=True)
-    # glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
-    # ctgi.create_glomap_ini(glomap_ini_path)
+    sparse_path = os.path.join(workspace_path, 'sparse')
+    os.makedirs(sparse_path, exist_ok=True)
+    glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
+    ctgi.create_glomap_ini(glomap_ini_path)
 
     # if custom_parameters:
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(glomap_ini_path, header, param, str(value))
 
-    # GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
+    GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
 
-    # ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    # cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
-    #write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
-    #MVS(workspace_path, log_file)
+    MVS(workspace_path, log_file)
     
     processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
     
@@ -261,11 +261,11 @@ def main()->None:
 if __name__ == '__main__':
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
-    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test"
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2"
     #video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
     video_path = r"c:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
     workspace_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
-    segments = [20]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
+    segments = [50]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
    
     run_colmap_process(video_path, segments[0], {'reduce_size': resize_factor[0]}, enhance_option=None, custom_parameters=None, sharpness_value=25.0)
