@@ -269,7 +269,29 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True):
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True, use_mask_adjustment=False, 
+                   min_mask_ratio=0.1, max_mask_ratio=0.8, neighbors_count=3):
+    """
+    Process a folder of images to generate segmentation masks.
+    
+    Args:
+        input_folder (str): Path to folder containing input images
+        output_folder (str): Path to folder for saving masks (wound+tissue combined)
+        num_workers (int): Number of parallel workers (for non-DeepSkin methods)
+        Use_SAM2 (bool): Use SAM2 for segmentation
+        Use_DeepSkin (bool): Use DeepSkin for wound segmentation (default: True)
+        use_mask_adjustment (bool): Apply mask adjustment workflow after segmentation
+        min_mask_ratio (float): Minimum acceptable mask area ratio (default: 0.1)
+        max_mask_ratio (float): Maximum acceptable mask area ratio (default: 0.8)
+        neighbors_count (int): Number of neighbors for mask adjustment (default: 3)
+    
+    When Use_DeepSkin=True, creates:
+        - {output_folder}: wound+tissue combined masks
+        - {output_folder}/../masks_wound_only: wound-only masks
+    
+    Example:
+        process_folder('images/', 'masks/', Use_DeepSkin=True, use_mask_adjustment=True)
+    """
 
     if Use_SAM2:
         
@@ -337,7 +359,10 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         folder_path = input_folder
         output_path = output_folder
         # Create output directories for mask channels
-        
+        wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_wound_only')
+        wound_tissue_folder = output_folder  # wound + tissue combined
+        os.makedirs(wound_only_folder, exist_ok=True)
+        os.makedirs(wound_tissue_folder, exist_ok=True)
 
         for img_name in os.listdir(folder_path):
             img_path = os.path.join(folder_path, img_name)
@@ -357,11 +382,51 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             tissue_channel = wound_mask[:, :, 1]
             background_channel = wound_mask[:, :, 2]
 
-            
+            # Create combined wound+tissue mask
             combined_mask = np.bitwise_or(wound_channel, tissue_channel)
             
-            # Save each channel with the same name as the original image
-            cv2.imwrite(os.path.join(output_folder, img_name + ".png"), combined_mask)
+            # Save wound-only mask
+            cv2.imwrite(os.path.join(wound_only_folder, img_name + ".png"), wound_channel)
+            
+            # Save wound+tissue combined mask
+            cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
+        
+        # Apply mask adjustment if requested
+        if use_mask_adjustment:
+            print("\n" + "="*60)
+            print("Applying Mask Adjustment Workflow")
+            print("="*60)
+            
+            # Import MaskAdjustment
+            sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+            from MaskAdjustment import MaskAdjustment
+            
+            # Apply to wound+tissue masks
+            print("\nAdjusting wound+tissue masks...")
+            mask_adjuster = MaskAdjustment(
+                folder_path, 
+                wound_tissue_folder, 
+                wound_tissue_folder,  # Output to same folder
+                min_mask_ratio=min_mask_ratio,
+                max_mask_ratio=max_mask_ratio,
+                neighbors_count=neighbors_count
+            )
+            
+            # Preprocess masks
+            mask_adjuster.perform_preprocessing(min_solidity=0.7)
+            
+            # Adjust small masks
+            mask_adjuster.simple_small_mask_adjustment()
+            
+            # Evaluate and adjust invalid masks
+            mask_adjuster.evaluate_masks(visualize=False)
+            mask_adjuster.adjust_masks(save_adjusted=False)
+            
+            # Save adjusted masks
+            mask_adjuster._save_all_masks()
+            
+            print("Mask adjustment complete!")
+
 
 
     else:
@@ -543,12 +608,12 @@ if __name__ == '__main__':
     # Example usage
     
     USE_SAM2 = False
-    USE_DEEPSKIN = False
+    USE_DEEPSKIN = True
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\Sharp_images"
-    output_path = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Fuss1\Maske_CombinedLAB"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\sharp_images"
+    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\masks"
 
 
     #Masking with SAM2
@@ -558,7 +623,7 @@ if __name__ == '__main__':
 
     #Masking with DeepSkin
     if USE_DEEPSKIN:
-        process_folder(img_folder_path, output_path, Use_DeepSkin=True)
+        process_folder(img_folder_path, output_path, Use_DeepSkin=True, use_mask_adjustment=True)
     else:
         process_folder(img_folder_path, output_path, Use_SAM2=USE_SAM2, Use_DeepSkin=USE_DEEPSKIN)
     #crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")

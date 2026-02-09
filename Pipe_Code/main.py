@@ -64,9 +64,17 @@ def create_workspace(workspace_path:str)->None:
     os.makedirs(image_mask_path, exist_ok=True)
 
 
+# Mask Creation Notes:
+# - DeepSkin creates two mask folders:
+#   1. {workspace}/masks: wound+tissue combined masks (used for reconstruction)
+#   2. {workspace}/masks_wound_only: pure wound masks
+# - Use use_mask_adjustment=True to enable automatic mask quality adjustment
+# - To create extended wound masks (wound + 10-20% tissue margin), use:
+#   from Pipe_Code.utils.ExtendWoundMask import create_extended_wound_masks
+#   create_extended_wound_masks('masks_wound_only', 'masks', 'masks_wound_extended', extension_percentage=0.15)
 
 #1. Analyse Video and extract image
-def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=25.0, enhance_option:str=None , Masking:bool=True)->str:
+def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:float, image_options:dict, min_sharpness_percentile:float=25.0, enhance_option:str=None , Masking:bool=True, use_mask_adjustment:bool=False)->str:
     start_time = time.time()
     prepare_vid_for_colmap_v5.extract_images_from_video(input_path, raw_images_path)
     
@@ -74,7 +82,7 @@ def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:f
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, absolut_min=min_sharpness_percentile, input_path=workspace_path)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
     if Masking:
-        masking.process_folder(sharp_image_path, image_mask_path)
+        masking.process_folder(sharp_image_path, image_mask_path, use_mask_adjustment=use_mask_adjustment)
     
     if enhance_option is not None:
         prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
@@ -194,9 +202,9 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    # Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True)
 
-    # COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
     # sparse_path = os.path.join(workspace_path, 'sparse')
     # os.makedirs(sparse_path, exist_ok=True)
