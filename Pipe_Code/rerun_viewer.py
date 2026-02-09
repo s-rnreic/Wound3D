@@ -87,7 +87,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
     # Log points with colors based on reprojection error
     error_colors = map_error_to_color(all_point_errors)
     rr.log("color_map_mean_repo_error", rr.Points3D(all_points_xyz, colors=error_colors), static=True)
-    rr.log("color_map_mean_repo_error", rr.Scalar(all_point_errors), static=True)
+    rr.log("color_map_mean_repo_error", rr.Scalars(all_point_errors), static=True)
 
     # Log points with colors based on track length
     track_lengths = [len(point.image_ids) for point in points3D.values()]
@@ -100,7 +100,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
         for length in track_lengths
     ]
     rr.log("track_length", rr.Points3D(all_points_xyz, colors=track_colors), static=True)
-    rr.log("track_length", rr.Scalar(track_lengths), static=True)
+    rr.log("track_length", rr.Scalars(track_lengths), static=True)
     rr.log("Bar/track_length", rr.BarChart(track_lengths_histo), static=True)
     
     
@@ -142,7 +142,7 @@ def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=F
         point_errors = [point.error for point in visible_xyzs]
 
         if point_errors:
-            rr.log("/plot/avg_reproj_err", rr.Scalar(np.mean(point_errors)))
+            rr.log("/plot/avg_reproj_err", rr.Scalars(np.mean(point_errors)))
 
         rr.log("points", rr.Points3D(points, colors=point_colors), rr.AnyValues(error=point_errors))
 
