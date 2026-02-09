@@ -302,21 +302,28 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         return
     
     elif Use_DeepSkin:
-        # Add parent directory to path
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        # Add the current directory to sys.path to import the wrapper
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
         
         # Check if DeepSkin is installed
         try:
-            from deepskin import wound_segmentation
+            from deepskin import wound_segmentation as _original_wound_segmentation
+            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
+            from deepskin_wrapper import wound_segmentation
             print("DeepSkin module found.")
         except ImportError:
             print("DeepSkin module not found. Installing DeepSkin...")
             import subprocess
             import shutil
             import tempfile
+            import stat
             
             # Create external directory if it doesn't exist
-            external_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external')
+            # Go up from Pipe_Code/modules/masking to COLMAP_Pipline root
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            external_dir = os.path.join(root_dir, 'external')
             os.makedirs(external_dir, exist_ok=True)
             
             # Path for DeepSkin installation
@@ -325,7 +332,17 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             # If Deepskin directory exists, remove it to start fresh
             if os.path.exists(deepskin_dir):
                 print(f"Removing existing DeepSkin directory at {deepskin_dir}")
-                shutil.rmtree(deepskin_dir)
+                
+                # Helper function to handle Windows permission errors
+                def handle_remove_readonly(func, path, exc):
+                    """Handle permission errors on Windows when deleting git files"""
+                    if not os.access(path, os.W_OK):
+                        os.chmod(path, stat.S_IWUSR)
+                        func(path)
+                    else:
+                        raise
+                
+                shutil.rmtree(deepskin_dir, onerror=handle_remove_readonly)
             
             # Clone DeepSkin repository
             print("Cloning DeepSkin repository...")
@@ -352,8 +369,9 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             os.chdir(cwd)
             
             # Import after installation
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-            from deepskin import wound_segmentation
+            from deepskin import wound_segmentation as _original_wound_segmentation
+            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
+            from deepskin_wrapper import wound_segmentation
             print("DeepSkin installed successfully.")
         
         folder_path = input_folder
@@ -398,8 +416,7 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             print("="*60)
             
             # Import MaskAdjustment
-            sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
-            from .MaskAdjustment import MaskAdjustment
+            from MaskAdjustment import MaskAdjustment
             
             # Apply to wound+tissue masks
             print("\nAdjusting wound+tissue masks...")
@@ -612,8 +629,8 @@ if __name__ == '__main__':
     
     checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
     config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\sharp_images"
-    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\masks"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2\sharp_images"
+    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2\masks"
 
 
     #Masking with SAM2
