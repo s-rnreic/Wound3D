@@ -441,8 +441,23 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             
             # Save adjusted masks
             mask_adjuster._save_all_masks()
+        
+        extrude_masks= True    
+        if extrude_masks:
+            from ExtendWoundMask import create_extended_wound_masks
+            print("Extruding masks...")
+            extruded_wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_extruded_wound_only')
+            os.makedirs(extruded_wound_only_folder, exist_ok=True)
+            stats = create_extended_wound_masks(
+                wound_only_folder,
+                wound_tissue_folder,
+                extruded_wound_only_folder,
+                extension_percentage=1.0,  # 70% extension
+                visualize_samples=0  # Visualize first 3 samples
+            )
+
             
-            print("Mask adjustment complete!")
+        print("Mask adjustment complete!")
 
 
 
