@@ -31,7 +31,7 @@ if _pipe_code_dir not in sys.path:
     sys.path.insert(0, _pipe_code_dir)
 
 from CODE_Evaluation_Viewer_Align.Transformation import *
-from read_write_model import read_model, qvec2rotmat
+from utils.read_write_model import read_model, qvec2rotmat
 from CODE_Evaluation_Viewer_Align.read_write_dense import read_array
 
 
