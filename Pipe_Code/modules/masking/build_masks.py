@@ -269,7 +269,7 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True, use_mask_adjustment=False, 
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True, use_mask_adjustment=False, extrude_masks=False, 
                    min_mask_ratio=0.1, max_mask_ratio=0.8, neighbors_count=3):
     """
     Process a folder of images to generate segmentation masks.
@@ -441,8 +441,7 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             
             # Save adjusted masks
             mask_adjuster._save_all_masks()
-        
-        extrude_masks= True    
+           
         if extrude_masks:
             from ExtendWoundMask import create_extended_wound_masks
             print("Extruding masks...")

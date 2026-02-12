@@ -82,7 +82,7 @@ def Video_Pipeline( input_path:str, workspace_path:str, log_file:str, segments:f
     selected_indices = prepare_vid_for_colmap_v5.select_sharp_images(sharpness_values, segments, absolut_min=min_sharpness_percentile, input_path=workspace_path)
     prepare_vid_for_colmap_v5.copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
     if Masking:
-        masking.process_folder(sharp_image_path, image_mask_path, use_mask_adjustment=use_mask_adjustment)
+        masking.process_folder(sharp_image_path, image_mask_path, use_mask_adjustment=use_mask_adjustment, extrude_masks=True, min_mask_ratio=0.05, max_mask_ratio=0.5, neighbors_count=3)
     
     if enhance_option is not None:
         prepare_vid_for_colmap_v5.enhance_img(sharp_image_path,sharp_image_path ,enhance_option)
