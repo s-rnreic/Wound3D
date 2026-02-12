@@ -4,7 +4,9 @@ import time
 import threading
 import shutil
 import trimesh
+from pathlib import Path
 from run_command import run_command
+from Pipe_Code.modules.masking.mask_undistortion import undistort_masks_with_colmap
 
 def execute_poisson_meshing(folder_path, input_ply=None):
     dataset_path = os.path.abspath(folder_path)
@@ -38,9 +40,9 @@ def execute_dense_reconstruction(folder_path):
     dense_path = os.path.join(dataset_path, 'dense')
     
     # Check if dense directory already exists
-    if os.path.exists(dense_path):
-        print("Dense reconstruction already exists, skipping...")
-        return
+    # if os.path.exists(dense_path):
+    #     print("Dense reconstruction already exists, skipping...")
+    #     return
     
     # Create dense directory
     os.makedirs(dense_path, exist_ok=True)
@@ -50,22 +52,57 @@ def execute_dense_reconstruction(folder_path):
     try:
         # Run image undistorter
         run_command(f"colmap image_undistorter --image_path '{os.path.join(dataset_path, 'sharp_images')}' --input_path '{os.path.join(dataset_path, 'sparse', '0')}' --output_path '{dense_path}' --output_type COLMAP")
-        
-        # Run patch match stereo
-        run_command(f"colmap patch_match_stereo --workspace_path '{dense_path}' --workspace_format COLMAP --PatchMatchStereo.geom_consistency true")
-        
-        # Run stereo fusion
-        mask_path = os.path.join(folder_path, "masks")
-        if os.path.exists(mask_path):
-            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN --StereoFusion.mask_path '{mask_path}'")
-            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY --StereoFusion.mask_path '{mask_path}'")        
-        else:
-            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN")
-            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY")        
-        
+
+        # Undistort masks before patch match stereo
+        sparse_model_dir = Path(dataset_path) / "sparse" / "0"
+        mask_candidates = [
+            "mask",
+            "masks",
+            "mask_wound_only",
+            "masks_wound_only",
+            "mask_extruded_wound_only",
+            "masks_extruded_wound_only",
+        ]
+        undistorted_mask_paths = {}
+        for mask_name in mask_candidates:
+            mask_dir = Path(folder_path) / mask_name
+            if not mask_dir.exists():
+                continue
+            output_dir = Path(dense_path) / f"{mask_name}_undistorted"
+            undistort_masks_with_colmap(
+                mask_dir=mask_dir,
+                sparse_model_dir=sparse_model_dir,
+                output_dir=output_dir,
+                colmap_exe="colmap",
+                output_type="COLMAP",
+                max_image_size=None,
+            )
+            _flatten_undistorted_masks(output_dir)
+            undistorted_mask_paths[mask_name] = output_dir
     except Exception as e:
         print("Reconstruction failed")
         return
+    #     # Run patch match stereo
+    #     run_command(f"colmap patch_match_stereo --workspace_path '{dense_path}' --workspace_format COLMAP --PatchMatchStereo.geom_consistency true")
+        
+    #     # Run stereo fusion
+    #     mask_path = os.path.join(folder_path, "masks")
+    #     if not os.path.exists(mask_path):
+    #         mask_path = os.path.join(folder_path, "mask")
+    #     if os.path.exists(mask_path):
+    #         # Prefer undistorted masks if they were created
+    #         key = "masks" if mask_path.endswith("masks") else "mask"
+    #         mask_path = undistorted_mask_paths.get(key, mask_path)
+    #         mask_path = os.fspath(mask_path)
+    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN --StereoFusion.mask_path '{mask_path}'")
+    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY --StereoFusion.mask_path '{mask_path}'")        
+    #     else:
+    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN")
+    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY")        
+        
+    # except Exception as e:
+    #     print("Reconstruction failed")
+    #     return
     
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -81,6 +118,27 @@ def delete_dense_folders(root_folder):
             dense_folder_path = os.path.join(dirpath, 'dense')
             print(f"Deleting folder: {dense_folder_path}")
             shutil.rmtree(dense_folder_path)
+
+
+def _flatten_undistorted_masks(output_dir: Path) -> None:
+    """Keep only undistorted masks in output_dir and remove COLMAP artifacts."""
+    output_dir = Path(output_dir)
+    images_dir = output_dir / "images"
+
+    if images_dir.exists():
+        for mask_file in images_dir.iterdir():
+            if not mask_file.is_file():
+                continue
+            target = output_dir / mask_file.name
+            if target.exists():
+                continue
+            shutil.move(os.fspath(mask_file), os.fspath(target))
+
+    for item in output_dir.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item)
+        elif item.is_file() and item.suffix.lower() != ".png":
+            item.unlink()
 
 if __name__ == "__main__":
     # Execute dense reconstruction for every folder in the Experiments directory
