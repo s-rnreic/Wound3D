@@ -237,11 +237,3 @@ def Rerun_Colmap_Pipeline(workspace_path:str)->None:
     cameras, images, filtered_points3D=read_and_log_sparse_reconstruction(dataset_path)
     return cameras, images, filtered_points3D
 
-if __name__ == "__main__":
-    #main()
-    #Rerun_Colmap_Pipeline(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\1_reso_0.1_sharp_circ_08_mask")
-    # base_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments"
-    # for folder in os.listdir(base_path):
-    #     full_path = os.path.join(base_path, folder)
-    #     Rerun_Colmap_Pipeline(full_path)
-    rr.init('COLMAP_Visualization', recording_id="test", spawn=True)

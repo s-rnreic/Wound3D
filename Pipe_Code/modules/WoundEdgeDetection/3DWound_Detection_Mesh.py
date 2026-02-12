@@ -43,6 +43,8 @@ if _pipe_code_dir not in sys.path:
 from CODE_Evaluation_Viewer_Align.Transformation import *
 from utils.read_write_model import read_model, qvec2rotmat
 from CODE_Evaluation_Viewer_Align.read_write_dense import read_array
+from modules.WoundEdgeDetection.WoundMeshCorrection import correct_wound_mesh_from_detection
+
 
 
 class MeshFaceRegion:
@@ -529,6 +531,17 @@ class WoundModel3DMesh:
         self.face_visibility_count = {}  # face_idx -> count
         self.wound_faces_global = set()  # Faces visible through masks
         self.wound_vertices_global = set()  # Vertices from wound faces
+
+        # Wound edge data
+        self.wound_edge_edges = []  # List of (v0, v1) tuples
+        self.wound_edge_vertices = set()  # Set of vertex indices on edge
+        self.wound_edge_faces = set()  # Wound faces adjacent to non-wound
+
+        # Filtering diagnostics
+        self.removed_faces_visibility = set()
+        self.removed_faces_smoothness = set()
+        self.removed_faces_connectivity = set()
+        self.added_faces_enclosed = set()
         
         # Connected components
         self.wound_regions = []  # List of connected wound regions
@@ -559,7 +572,7 @@ class WoundModel3DMesh:
             
             # Load colors if available
             if mesh.has_vertex_colors():
-                self.vertex_colors = np.asarray(mesh.vertex_colors) * 255.0  # Scale to 0-255
+                self.vertex_colors = np.asarray(mesh.vertex_colors) # Scale to 0-255
             
             # Load or compute normals
             if mesh.has_vertex_normals():
@@ -722,12 +735,7 @@ class WoundModel3DMesh:
             raise ValueError("filter_mode must be 'numpy', 'open3d', or 'auto'")
 
         selected_mode = filter_mode
-        if filter_mode == "auto":
-            selected_mode = self._auto_select_filter_mode(
-                benchmark_cameras=benchmark_cameras,
-                max_mask_rays=max_mask_rays,
-                speedup_threshold=speedup_threshold
-            )
+       
 
         print(f"Using filter mode: {selected_mode}")
 
@@ -1030,11 +1038,295 @@ class WoundModel3DMesh:
         
         print(f"Smoothness filtering: {len(smooth_faces)}/{len(face_set)} faces are smooth")
         return smooth_faces
+
+    def expand_wound_by_enclosed_faces(self, wound_faces: Set[int]) -> Set[int]:
+        """Expand wound to include enclosed non-wound faces.
+
+        Any non-wound faces that are not reachable from mesh boundary without
+        crossing a wound face are treated as inside the wound region.
+        """
+        import rerun as rr
+        rr.init ("3D Wound Detection", spawn=True)
+        
+        
+        if not self.topology_computed or not wound_faces:
+            return wound_faces
+
+        boundary_faces = self._get_boundary_faces()
+        non_wound_faces = set(range(len(self.faces))) - set(wound_faces)
+
+        # Extract boundary face vertices and normals for visualization
+        if boundary_faces:
+            boundary_face_list = list(boundary_faces)
+            boundary_vertex_set = set()
+            for face_idx in boundary_face_list:
+                face = self.faces[face_idx]
+                boundary_vertex_set.update(face)
+            
+            boundary_vertex_list = sorted(list(boundary_vertex_set))
+            vertex_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(boundary_vertex_list)}
+            
+            # Extract vertex positions and normals
+            boundary_positions = self.vertices[boundary_vertex_list]
+            boundary_normals = self.vertex_normals[boundary_vertex_list] if self.vertex_normals is not None else None
+            
+            # Remap faces to new vertex indices
+            boundary_triangles = []
+            for face_idx in boundary_face_list:
+                old_face = self.faces[face_idx]
+                new_face = [vertex_remap[v] for v in old_face]
+                boundary_triangles.append(new_face)
+            
+            # Log boundary faces mesh
+            rr.log(
+                "/wound/boundary_faces",
+                rr.Mesh3D(
+                    vertex_positions=boundary_positions,
+                    vertex_normals=boundary_normals,
+                    vertex_colors=[[0, 255, 255]] * len(boundary_positions),  # Cyan
+                    triangle_indices=boundary_triangles,
+                ),
+            )
+            
+            # Log wound faces
+            wound_face_list = list(wound_faces)
+            rr.log(
+                "/wound/wound_faces",
+                rr.Mesh3D(
+                    vertex_positions=self.vertices,
+                    vertex_normals=self.vertex_normals,
+                    vertex_colors=self.vertex_colors,  
+                    triangle_indices=[self.faces[f] for f in wound_face_list],
+                ),
+            )
+
+            # Log non-wound faces
+            non_wound_face_list = list(non_wound_faces)
+            non_wound_vertex_set = set()
+            for face_idx in non_wound_face_list:
+                face = self.faces[face_idx]
+                non_wound_vertex_set.update(face)
+            
+            non_wound_vertex_list = sorted(list(non_wound_vertex_set))
+            non_wound_vertex_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(non_wound_vertex_list)}
+            
+            non_wound_positions = self.vertices[non_wound_vertex_list]
+            non_wound_normals = self.vertex_normals[non_wound_vertex_list] if self.vertex_normals is not None else None
+            
+            non_wound_triangles = []
+            for face_idx in non_wound_face_list:
+                old_face = self.faces[face_idx]
+                new_face = [non_wound_vertex_remap[v] for v in old_face]
+                non_wound_triangles.append(new_face)
+            
+            rr.log(
+                "/wound/non_wound_faces",
+                rr.Mesh3D(
+                    vertex_positions=non_wound_positions,
+                    vertex_normals=non_wound_normals,
+                    vertex_colors=[[0, 255, 30]] * len(non_wound_positions),  # Green
+                    triangle_indices=non_wound_triangles,
+                ),
+            )
+        
+        queue = deque([f for f in boundary_faces if f in non_wound_faces])
+        outside = set()
+
+        while queue:
+            face_idx = queue.popleft()
+            if face_idx in outside:
+                continue
+            outside.add(face_idx)
+
+            for adj_face in self.face_adjacency.get(face_idx, []):
+                if adj_face in non_wound_faces and adj_face not in outside:
+                    queue.append(adj_face)
+
+        enclosed_faces = non_wound_faces - outside
+        if enclosed_faces:
+            print(f"Expanded wound with {len(enclosed_faces)} enclosed faces")
+
+        return set(wound_faces) | enclosed_faces
+
+    def _get_boundary_faces(self) -> Set[int]:
+        """Get faces on the mesh boundary (edges with only one adjacent face)."""
+        boundary_faces = set()
+        for edge, face_list in self.edge_adjacency.items():
+            if len(face_list) == 1:
+                boundary_faces.add(face_list[0])
+        return boundary_faces
+
+    def compute_wound_edge(self, wound_faces: Set[int]) -> None:
+        """Compute wound edge edges and vertices from wound/non-wound boundary."""
+        self.wound_edge_edges = []
+        self.wound_edge_vertices = set()
+        self.wound_edge_faces = set()
+
+        wound_faces_set = set(wound_faces)
+        all_faces_set = set(range(len(self.faces)))
+        non_wound_faces = all_faces_set - wound_faces_set
+
+        for edge, face_list in self.edge_adjacency.items():
+            wound_count = sum(1 for f in face_list if f in wound_faces_set)
+            non_wound_count = sum(1 for f in face_list if f in non_wound_faces)
+
+            if wound_count > 0 and (non_wound_count > 0 or len(face_list) == 1):
+                self.wound_edge_edges.append(edge)
+                self.wound_edge_vertices.update(edge)
+                for f in face_list:
+                    if f in wound_faces_set:
+                        self.wound_edge_faces.add(f)
+    
+    def filter_wound_faces(self, min_visibility: int = 2, 
+                          use_smoothness: bool = True) -> Set[int]:
+        """
+        Filter wound faces by visibility and surface smoothness.
+        
+        Args:
+            min_visibility: Minimum camera visibility count
+            use_smoothness: Whether to apply smoothness filtering
+            
+        Returns:
+            Set of filtered face indices
+        """
+        if not self.faces_processed:
+            raise ValueError("Must process wound segmentation first")
+        
+        # Start with visibility filtering
+        filtered_faces = self.filter_by_visibility(min_visibility)
+        self.removed_faces_visibility = set(self.wound_faces_global) - set(filtered_faces)
+        
+        # Apply smoothness filtering
+        if use_smoothness and len(filtered_faces) > 0:
+            pre_smooth = set(filtered_faces)
+            filtered_faces = self.filter_by_surface_smoothness(filtered_faces)
+            self.removed_faces_smoothness = pre_smooth - set(filtered_faces)
+        else:
+            self.removed_faces_smoothness = set()
+        
+        return filtered_faces
+    
+    def morphological_closing(self, face_set: Set[int], iterations: int = 1, kernel_size: int = 1) -> Set[int]:
+        """
+        Perform morphological closing on wound faces (dilation followed by erosion).
+        
+        Similar to 2D closing, this operation fills small holes and gaps in the wound region
+        by first expanding (dilating) the wound faces to include adjacent non-wound faces,
+        then contracting (eroding) back to remove temporary additions.
+        
+        Args:
+            face_set: Set of face indices to perform closing on
+            iterations: Number of closing iterations
+            kernel_size: Number of adjacency layers to expand in each dilation step (1=immediate neighbors, 2=2 layers, etc.)
+            
+        Returns:
+            Set of face indices after closing operation
+        """
+        if not self.topology_computed or not face_set:
+            return face_set
+        
+        def _erode_faces(face_ids: Set[int], drop_isolated: bool = False) -> Set[int]:
+            eroded_faces = set()
+            for face_idx in face_ids:
+                adjacent = self.face_adjacency.get(face_idx, [])
+                if drop_isolated and not adjacent:
+                    continue
+                wound_neighbors = sum(1 for adj in adjacent if adj in face_ids)
+                if wound_neighbors >= len(adjacent) / 2:
+                    if not drop_isolated or wound_neighbors > 0:
+                        eroded_faces.add(face_idx)
+            return eroded_faces
+
+        current_faces = face_set.copy()
+
+        # Pre-erosion to drop tiny isolated structures before closing.
+        current_faces = _erode_faces(current_faces, drop_isolated=True)
+        
+        for iteration in range(iterations):
+            # Dilation: expand by kernel_size layers of adjacent faces
+            dilated = current_faces.copy()
+            expansion_front = current_faces.copy()
+            
+            
+            for layer in range(kernel_size):
+                next_front = set()
+                for face_idx in expansion_front:
+                    adjacent = self.face_adjacency.get(face_idx, [])
+                    for adj_face in adjacent:
+                        if adj_face not in dilated:
+                            next_front.add(adj_face)
+                dilated.update(next_front)
+                expansion_front = next_front
+                if not expansion_front:  # No more faces to expand
+                    break
+            
+            # Erosion: remove faces that don't have enough wound neighbors
+            eroded = _erode_faces(dilated, drop_isolated=False)
+            
+            current_faces = eroded
+        
+        added_faces = current_faces - face_set
+        if added_faces:
+            print(f"Morphological closing added {len(added_faces)} faces")
+        
+        return current_faces
+    
+    def expand_and_extract_components(self, face_set: Set[int],
+                                     use_connectivity: bool = True,
+                                     min_component_faces: int = 10) -> Set[int]:
+        """
+        Expand wound to include enclosed faces and extract connected components.
+        
+        Args:
+            face_set: Set of face indices to process
+            use_connectivity: Whether to extract connected components
+            min_component_faces: Minimum faces for valid component
+            
+        Returns:
+            Set of final face indices
+        """
+        if not face_set:
+            return face_set
+        
+        # Expand wound to include enclosed faces
+        if use_connectivity:
+            pre_expand = set(face_set)
+            expanded_faces = self.expand_wound_by_enclosed_faces(face_set)
+            self.added_faces_enclosed = set(expanded_faces) - pre_expand
+        else:
+            expanded_faces = face_set
+            self.added_faces_enclosed = set()
+        
+        # Extract connected components
+        if use_connectivity and len(expanded_faces) > 0:
+            pre_connectivity = set(expanded_faces)
+            components = self.extract_connected_components(expanded_faces, min_component_faces)
+            
+            if components:
+                # Take largest component as primary wound
+                largest_component = max(components, key=len)
+                final_faces = largest_component
+                print(f"Selected largest component with {len(largest_component)} faces")
+            else:
+                print("Warning: No valid connected components found")
+                final_faces = set()
+
+            self.removed_faces_connectivity = pre_connectivity - set(final_faces)
+        else:
+            final_faces = expanded_faces
+            self.removed_faces_connectivity = set()
+        
+        return final_faces
     
     def get_wound_mesh(self, min_visibility: int = 2, 
                       use_connectivity: bool = True,
                       min_component_faces: int = 10,
-                      use_smoothness: bool = True) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      use_smoothness: bool = True,
+                      use_closing: bool = True,
+                      closing_iterations: int = 1,
+                      closing_kernel_size: int = 1,
+                      use_fill_holes: bool = False,
+                      hole_size: float = -1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Get final wound mesh after all filtering steps.
         
@@ -1043,6 +1335,11 @@ class WoundModel3DMesh:
             use_connectivity: Whether to extract connected components
             min_component_faces: Minimum faces for valid component
             use_smoothness: Whether to apply smoothness filtering
+            use_closing: Whether to apply morphological closing
+            closing_iterations: Number of closing iterations
+            closing_kernel_size: Number of adjacency layers to expand per iteration (1=neighbors, 2=2 layers, etc.)
+            use_fill_holes: Whether to fill holes in the mesh using trimesh
+            hole_size: Maximum hole size to fill (-1.0 for all holes)
             
         Returns:
             Tuple of (wound_vertices, wound_faces, wound_colors)
@@ -1050,28 +1347,28 @@ class WoundModel3DMesh:
         if not self.faces_processed:
             raise ValueError("Must process wound segmentation first")
         
-        # Start with visibility filtering
-        filtered_faces = self.filter_by_visibility(min_visibility)
-        
-        # Apply smoothness filtering
-        if use_smoothness and len(filtered_faces) > 0:
-            filtered_faces = self.filter_by_surface_smoothness(filtered_faces)
-        
-        # Extract connected components
-        if use_connectivity and len(filtered_faces) > 0:
-            components = self.extract_connected_components(filtered_faces, min_component_faces)
-            
-            if components:
-                # Take largest component as primary wound
-                largest_component = max(components, key=len)
-                filtered_faces = largest_component
-                print(f"Selected largest component with {len(largest_component)} faces")
-            else:
-                print("Warning: No valid connected components found")
-                filtered_faces = set()
+        # Step 1: Filter by visibility and smoothness
+        filtered_faces = self.filter_wound_faces(min_visibility, use_smoothness)
         
         if not filtered_faces:
             print("Warning: No wound faces remain after filtering")
+            return np.array([]), np.array([]), np.array([])
+        
+        # Step 2: Apply morphological closing
+        if use_closing:
+            filtered_faces = self.morphological_closing(filtered_faces, closing_iterations, closing_kernel_size)
+        
+        if not filtered_faces:
+            print("Warning: No wound faces remain after closing")
+            return np.array([]), np.array([]), np.array([])
+        
+        # Step 3: Expand and extract components
+        filtered_faces = self.expand_and_extract_components(
+            filtered_faces, use_connectivity, min_component_faces
+        )
+        
+        if not filtered_faces:
+            print("Warning: No wound faces remain after component extraction")
             return np.array([]), np.array([]), np.array([])
         
         # Extract wound vertices and remap faces
@@ -1097,13 +1394,82 @@ class WoundModel3DMesh:
             wound_faces.append(new_face)
         wound_faces = np.array(wound_faces)
         
+        # Step 4: Fill holes in the mesh (optional)
+        if use_fill_holes and len(wound_vertices) > 0:
+            print("Filling holes in wound mesh...")
+            wound_vertices, wound_faces, wound_colors = self._fill_mesh_holes(
+                wound_vertices, wound_faces, wound_colors, hole_size
+            )
+        
         print(f"Final wound mesh: {len(wound_vertices)} vertices, {len(wound_faces)} faces")
         
         # Update global tracking
         self.wound_faces_global = filtered_faces
         self.wound_vertices_global = wound_vertex_set
+
+        # Compute wound edge boundary
+        self.compute_wound_edge(filtered_faces)
         
         return wound_vertices, wound_faces, wound_colors
+    
+    def _fill_mesh_holes(self, vertices: np.ndarray, faces: np.ndarray, 
+                        colors: np.ndarray = None, hole_size: float = -1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Fill holes in the mesh using trimesh's fill_holes method.
+        
+        Args:
+            vertices: Vertex array (N, 3)
+            faces: Face array (M, 3)
+            colors: Optional color array (N, 3)
+            hole_size: Maximum hole size to fill (-1.0 for all holes)
+            
+        Returns:
+            Tuple of (vertices, faces, colors) after hole filling
+        """
+        try:
+            import trimesh
+
+            if hole_size not in (-1.0, None):
+                print("Note: trimesh.fill_holes ignores hole_size and fills all holes")
+
+            colors_uint8 = None
+            if colors is not None:
+                if np.max(colors) <= 1.0:
+                    colors_uint8 = (colors * 255.0).astype(np.uint8)
+                else:
+                    colors_uint8 = colors.astype(np.uint8)
+
+            mesh = trimesh.Trimesh(
+                vertices=vertices,
+                faces=faces,
+                vertex_colors=colors_uint8,
+                process=False
+            )
+
+            initial_faces = len(mesh.faces)
+            print("Attempting to fill holes in wound mesh...")
+            added = mesh.fill_holes()
+
+            vertices_filled = np.asarray(mesh.vertices)
+            faces_filled = np.asarray(mesh.faces)
+
+            colors_filled = colors
+            if colors_uint8 is not None and hasattr(mesh.visual, "vertex_colors"):
+                vcols = np.asarray(mesh.visual.vertex_colors)
+                if vcols.ndim == 2 and vcols.shape[1] >= 3:
+                    colors_filled = vcols[:, :3]
+
+            filled_faces = len(faces_filled)
+            print(f"Hole filling complete: {initial_faces} -> {filled_faces} faces (added {added})")
+
+            return vertices_filled, faces_filled, colors_filled
+
+        except ImportError:
+            print("Trimesh not available for hole filling, returning original mesh")
+            return vertices, faces, colors
+        except Exception as e:
+            print(f"Error during hole filling: {e}, returning original mesh")
+            return vertices, faces, colors
     
     def save_wound_mesh(self, output_path: Path, vertices: np.ndarray, 
                        faces: np.ndarray, colors: np.ndarray = None):
@@ -1215,6 +1581,32 @@ class WoundModel3DMesh:
                 colors=wound_colors,
                 radii=0.002
             ), static=True)
+
+        # Log wound edge vertices and edges
+        if self.wound_edge_vertices:
+            edge_vertex_list = list(self.wound_edge_vertices)
+            edge_positions = self.vertices[edge_vertex_list]
+            edge_colors = np.array([[255, 255, 0]] * len(edge_vertex_list), dtype=np.uint8)
+            rr.log("/wound/edge_vertices", rr.Points3D(
+                positions=edge_positions,
+                colors=edge_colors,
+                radii=0.003
+            ), static=True)
+
+        if self.wound_edge_edges:
+            edge_strips = []
+            for v0, v1 in self.wound_edge_edges:
+                edge_strips.append(np.array([self.vertices[v0], self.vertices[v1]], dtype=np.float32))
+            rr.log("/wound/edge_edges", rr.LineStrips3D(
+                strips=edge_strips,
+                colors=[[255, 255, 0]] * len(edge_strips),
+                radii=0.0008
+            ), static=True)
+
+        # Log removed faces by filtering steps
+        self._log_removed_faces_rr(rr, "/wound/removed/visibility", self.removed_faces_visibility, [160, 160, 160])
+        self._log_removed_faces_rr(rr, "/wound/removed/smoothness", self.removed_faces_smoothness, [0, 128, 255])
+        self._log_removed_faces_rr(rr, "/wound/removed/connectivity", self.removed_faces_connectivity, [255, 128, 0])
         
         # Log statistics
         stats_text = f"""
@@ -1230,6 +1622,24 @@ Mesh Statistics:
         rr.log("/stats", rr.TextDocument(stats_text), static=True)
         
         print(f"Rerun visualization started: {session_name}")
+
+    def _log_removed_faces_rr(self, rr, path: str, face_set: Set[int], color: List[int]) -> None:
+        """Log vertices from a face set for visualization in Rerun."""
+        if not face_set:
+            return
+        vertex_set = set()
+        for face_idx in face_set:
+            face = self.faces[face_idx]
+            vertex_set.update(face)
+
+        vertex_list = list(vertex_set)
+        positions = self.vertices[vertex_list]
+        colors = np.array([color] * len(vertex_list), dtype=np.uint8)
+        rr.log(path, rr.Points3D(
+            positions=positions,
+            colors=colors,
+            radii=0.0018
+        ), static=True)
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get comprehensive statistics about mesh-based wound segmentation."""
@@ -1270,7 +1680,12 @@ def main():
     model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense")
     mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\mask_wound_only_undistorted\images")
     output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense\wound_mesh.ply")
+    output_path_corrected = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense\wound_mesh_corrected.ply")
     
+    
+    # mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\dense\poisson.ply")
+    # model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\dense")
+    # mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\dense\images_woundmask")
     try:
         # Initialize model
         wound_model = WoundModel3DMesh()
@@ -1301,18 +1716,52 @@ def main():
         print("\n=== Extracting Wound Mesh ===")
         wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
             min_visibility=3,  # Require visibility from multiple cameras
-            use_connectivity=False,  # Extract connected components
-            min_component_faces=10,  # Minimum size for valid component
-            use_smoothness=False  # Filter by surface smoothness
+            use_connectivity=True,  # Extract connected components
+            min_component_faces=100,  # Minimum size for valid component
+            use_smoothness=False,  # Filter by surface smoothness
+            use_closing=False,  # Apply morphological closing
+            closing_iterations=5,  # Number of closing iterations
+            closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
+            use_fill_holes=True,  # We'll use trimesh instead in correction step
+            hole_size=-1.0
         )
         
-        # Save wound mesh
+        # Get initial statistics before correction
+        print("\n=== Initial Wound Mesh Statistics ===")
+        print(f"Vertices: {len(wound_vertices)}")
+        print(f"Faces: {len(wound_faces)}")
+        
+        # Correct and close wound mesh
+        print("\n=== Correcting and Closing Wound Mesh ===")
+        corrected_vertices, corrected_faces, corrected_colors = correct_wound_mesh_from_detection(
+            wound_vertices, wound_faces, wound_colors,
+            full_vertices=wound_model.vertices,
+            full_faces=wound_model.faces,
+            simplify_full_mesh=True,  # Only simplify if mesh is very large (300k+ vertices)
+            verbose=True
+        )
+        
+        # Get corrected statistics
+        print("\n=== Corrected Wound Mesh Statistics ===")
+        print(f"Vertices: {len(corrected_vertices)}")
+        print(f"Faces: {len(corrected_faces)}")
+        
+        # Use corrected mesh for output
+        wound_vertices = corrected_vertices
+        wound_faces = corrected_faces
+        if wound_colors is not None and corrected_colors is not None:
+            wound_colors = corrected_colors
         # if len(wound_vertices) > 0:
-        #     print("\n=== Saving Wound Mesh ===")
+        #     print("\n=== Saving Meshes ===")
         #     wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
+        #     print(f"Saved initial wound mesh to: {output_path}")
+        
+        # if len(corrected_vertices) > 0:
+        #     wound_model.save_wound_mesh(output_path_corrected, corrected_vertices, corrected_faces, corrected_colors)
+        #     print(f"Saved corrected wound mesh to: {output_path_corrected}")
         
         # Visualize
-        print("\n=== Launching Visualization ===")
+        # print("\n=== Launching Visualization ===")
         wound_model.visualize_with_rerun("WoundModel3DMesh_Main")
         
         print("\n=== Processing Complete ===")
