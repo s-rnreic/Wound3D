@@ -38,9 +38,9 @@ def undistort_masks_with_colmap(
 	"""Run COLMAP image_undistorter on a folder of masks.
 
 	Args:
-		mask_dir: Folder containing mask images.
+		mask_dir: Folder containing mask images (as image_name.jpg.png).
 		sparse_model_dir: COLMAP sparse model folder (e.g., sparse/0).
-		output_dir: Output folder for undistorted masks.
+		output_dir: Output folder for undistorted masks (will contain image_name.jpg.png).
 		colmap_exe: COLMAP executable name or full path.
 		output_type: COLMAP output type (e.g., COLMAP).
 		max_image_size: Optional max image size (int) passed to COLMAP.
@@ -61,40 +61,91 @@ def undistort_masks_with_colmap(
 		)
 
 	output_dir.mkdir(parents=True, exist_ok=True)
-	compat_mask_dir = output_dir / "_colmap_mask_input"
-	_ensure_colmap_mask_names(mask_dir, compat_mask_dir)
+	
+	# Create temporary folder with masks as image_name.jpg (without .png extension)
+	temp_input_dir = output_dir / "_temp_colmap_input"
+	temp_output_dir = output_dir / "_temp_colmap_output"
+	
+	try:
+		_prepare_masks_for_undistortion(mask_dir, temp_input_dir)
 
-	cmd = (
-		f"\"{colmap_exe}\" image_undistorter "
-		f"--image_path \"{compat_mask_dir}\" "
-		f"--input_path \"{sparse_model_dir}\" "
-		f"--output_path \"{output_dir}\" "
-		f"--output_type {output_type}"
-	)
+		cmd = (
+			f"\"{colmap_exe}\" image_undistorter "
+			f"--image_path \"{temp_input_dir}\" "
+			f"--input_path \"{sparse_model_dir}\" "
+			f"--output_path \"{temp_output_dir}\" "
+			f"--output_type {output_type}"
+		)
 
-	if max_image_size is not None:
-		cmd += f" --max_image_size {max_image_size}"
+		if max_image_size is not None:
+			cmd += f" --max_image_size {max_image_size}"
 
-	print("Running:", cmd)
-	Pipe_Code.run_command.run_command(cmd)
+		print("Running:", cmd)
+		Pipe_Code.run_command.run_command(cmd)
+		
+		# Move undistorted masks from temp output to final output and add .png extension
+		_finalize_undistorted_masks(temp_output_dir, output_dir)
+		
+	finally:
+		# Clean up temporary directories
+		if temp_input_dir.exists():
+			shutil.rmtree(temp_input_dir)
+		if temp_output_dir.exists():
+			shutil.rmtree(temp_output_dir)
 
 
-def _ensure_colmap_mask_names(mask_dir: Path, compat_mask_dir: Path) -> None:
-	"""Create a COLMAP-compatible mask folder by removing the trailing .png."""
-	compat_mask_dir.mkdir(parents=True, exist_ok=True)
+def _prepare_masks_for_undistortion(mask_dir: Path, temp_input_dir: Path) -> None:
+	"""
+	Copy masks from mask_dir to temp_input_dir, removing the .png extension.
+	
+	Converts: image_name.jpg.png -> image_name.jpg
+	"""
+	temp_input_dir.mkdir(parents=True, exist_ok=True)
 
 	mask_files = list(mask_dir.glob("*.png"))
 	if not mask_files:
 		raise FileNotFoundError(f"No .png masks found in: {mask_dir}")
 
 	for mask_path in mask_files:
-		# image.jpg.png -> image.jpg, image.png.png -> image.png
-		output_name = mask_path.stem
-		output_path = compat_mask_dir / output_name
+		# image.jpg.png -> image.jpg
+		output_name = mask_path.stem  # Remove .png extension
+		output_path = temp_input_dir / output_name
 
 		if output_path.exists():
 			continue
 
+		shutil.copy2(mask_path, output_path)
+		
+
+def _finalize_undistorted_masks(temp_output_dir: Path, final_output_dir: Path) -> None:
+	"""
+	Move undistorted masks from temp COLMAP output to final folder,
+	adding back the .png extension.
+	
+	Converts: image_name.jpg -> image_name.jpg.png
+	"""
+	final_output_dir.mkdir(parents=True, exist_ok=True)
+	
+	# COLMAP outputs to temp_output_dir/images/
+	images_dir = temp_output_dir / "images"
+	if not images_dir.exists():
+		raise FileNotFoundError(f"COLMAP output images directory not found: {images_dir}")
+	
+	mask_files = list(images_dir.glob("*"))
+	if not mask_files:
+		raise FileNotFoundError(f"No undistorted masks found in: {images_dir}")
+	
+	for mask_path in mask_files:
+		if not mask_path.is_file():
+			continue
+		
+		# image.jpg -> image.jpg.png
+		output_name = mask_path.name + ".png"
+		output_path = final_output_dir / output_name
+		
+		if output_path.exists():
+			continue
+		
 		shutil.copy2(mask_path, output_path)
 
 

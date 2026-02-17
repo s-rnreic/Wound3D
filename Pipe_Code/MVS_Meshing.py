@@ -22,7 +22,7 @@ def execute_poisson_meshing(folder_path, input_ply=None):
     try:
         # Run poisson meshing
         input_path = input_ply if input_ply is not None else os.path.join(dense_path, 'fused.ply')
-        run_command(f"colmap poisson_mesher --input_path '{input_path}' --output_path '{os.path.join(dense_path, 'poisson.ply')}' --PoissonMeshing.trim 3")
+        run_command(f"colmap poisson_mesher --input_path '{input_path}' --output_path '{os.path.join(dense_path, 'poisson.ply')}' --PoissonMeshing.trim 4")
     except Exception as e:
         print("Poisson meshing failed: ", e)
         return
@@ -79,38 +79,34 @@ def execute_dense_reconstruction(folder_path):
             )
             _flatten_undistorted_masks(output_dir)
             undistorted_mask_paths[mask_name] = output_dir
+    
+        # Run patch match stereo
+        run_command(f"colmap patch_match_stereo --workspace_path '{dense_path}' --workspace_format COLMAP --PatchMatchStereo.geom_consistency true")
+        
+        # Run stereo fusion
+        mask_path = os.path.join(folder_path, "masks")
+        if not os.path.exists(mask_path):
+            mask_path = os.path.join(folder_path, "mask")
+        if os.path.exists(mask_path):
+            # Prefer undistorted masks if they were created
+            key = "masks" if mask_path.endswith("masks") else "mask"
+            mask_path = undistorted_mask_paths.get(key, mask_path)
+            mask_path = os.fspath(mask_path)
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN --StereoFusion.mask_path '{mask_path}'")
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY --StereoFusion.mask_path '{mask_path}'")        
+        else:
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN")
+            run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY")        
+        
     except Exception as e:
         print("Reconstruction failed")
         return
-    #     # Run patch match stereo
-    #     run_command(f"colmap patch_match_stereo --workspace_path '{dense_path}' --workspace_format COLMAP --PatchMatchStereo.geom_consistency true")
-        
-    #     # Run stereo fusion
-    #     mask_path = os.path.join(folder_path, "masks")
-    #     if not os.path.exists(mask_path):
-    #         mask_path = os.path.join(folder_path, "mask")
-    #     if os.path.exists(mask_path):
-    #         # Prefer undistorted masks if they were created
-    #         key = "masks" if mask_path.endswith("masks") else "mask"
-    #         mask_path = undistorted_mask_paths.get(key, mask_path)
-    #         mask_path = os.fspath(mask_path)
-    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN --StereoFusion.mask_path '{mask_path}'")
-    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY --StereoFusion.mask_path '{mask_path}'")        
-    #     else:
-    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path)}' --output_type BIN")
-    #         run_command(f"colmap stereo_fusion --workspace_path '{dense_path}' --workspace_format COLMAP --input_type geometric --output_path '{os.path.join(dense_path, 'fused.ply')}' --output_type PLY")        
-        
-    # except Exception as e:
-    #     print("Reconstruction failed")
-    #     return
     
     end_time = time.time()
     elapsed_time = end_time - start_time
     
     return elapsed_time 
-    # # Log the execution time and folder path
-    # with open("dense_elapse_time.txt", "a") as log_file:
-    #     log_file.write(f"{folder_path}: {elapsed_time} seconds\n")
+
 
 def delete_dense_folders(root_folder):
     for dirpath, dirnames, filenames in os.walk(root_folder):
@@ -121,23 +117,19 @@ def delete_dense_folders(root_folder):
 
 
 def _flatten_undistorted_masks(output_dir: Path) -> None:
-    """Keep only undistorted masks in output_dir and remove COLMAP artifacts."""
+    """
+    Keep only undistorted masks in output_dir and remove COLMAP artifacts.
+    Note: With the new workflow, masks should already be in output_dir with .png extension.
+    This function now just cleans up any remaining subdirectories.
+    """
     output_dir = Path(output_dir)
-    images_dir = output_dir / "images"
 
-    if images_dir.exists():
-        for mask_file in images_dir.iterdir():
-            if not mask_file.is_file():
-                continue
-            target = output_dir / mask_file.name
-            if target.exists():
-                continue
-            shutil.move(os.fspath(mask_file), os.fspath(target))
-
+    # Clean up any subdirectories that might have been created
     for item in output_dir.iterdir():
         if item.is_dir():
             shutil.rmtree(item)
         elif item.is_file() and item.suffix.lower() != ".png":
+            # Remove non-png files (shouldn't exist, but clean up if present)
             item.unlink()
 
 if __name__ == "__main__":
