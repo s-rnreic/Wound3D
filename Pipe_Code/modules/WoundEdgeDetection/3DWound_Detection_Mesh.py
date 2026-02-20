@@ -43,168 +43,6 @@ if _pipe_code_dir not in sys.path:
 from CODE_Evaluation_Viewer_Align.Transformation import *
 from utils.read_write_model import read_model, qvec2rotmat
 from CODE_Evaluation_Viewer_Align.read_write_dense import read_array
-from modules.WoundEdgeDetection.WoundMeshCorrection import correct_wound_mesh_from_detection
-
-
-
-class MeshFaceRegion:
-    """
-    A region of connected mesh faces for local surface analysis.
-    
-    This class represents a group of connected triangular faces and computes
-    local properties like mean curvature, surface smoothness, and wound likelihood.
-    """
-    
-    def __init__(self, region_id: int, seed_face_idx: int = None):
-        """
-        Initialize a MeshFaceRegion.
-        
-        Args:
-            region_id: Unique identifier for this region
-            seed_face_idx: Initial face index for region growing
-        """
-        self.region_id = region_id
-        self.seed_face_idx = seed_face_idx
-        
-        # Face and vertex data
-        self.face_indices = []  # List of face indices in this region
-        self.vertex_indices = set()  # Set of vertex indices (unique)
-        
-        # Computed properties
-        self.centroid = None
-        self.mean_normal = None
-        self.mean_curvature = None
-        self.surface_area = 0.0
-        self.mean_color = None
-        self.color_variance = None
-        
-        # Boundary information
-        self.boundary_edges = []  # List of edge tuples on region boundary
-        self.is_boundary_region = False
-        
-        # Wound likelihood score
-        self.wound_score = 0.0
-        
-        # Validity flags
-        self.properties_computed = False
-        self.is_valid = True
-    
-    def add_faces(self, face_indices: List[int], vertices: np.ndarray, 
-                  faces: np.ndarray, vertex_colors: np.ndarray = None):
-        """
-        Add faces to this region and update vertex set.
-        
-        Args:
-            face_indices: List of face indices to add
-            vertices: Global vertex array (N, 3)
-            faces: Global face array (M, 3)
-            vertex_colors: Global vertex color array (N, 3)
-        """
-        self.face_indices = face_indices
-        
-        # Extract unique vertices from these faces
-        self.vertex_indices.clear()
-        for face_idx in face_indices:
-            face = faces[face_idx]
-            self.vertex_indices.update(face)
-        
-        self.is_valid = len(self.face_indices) > 0
-    
-    def compute_properties(self, vertices: np.ndarray, faces: np.ndarray, 
-                          vertex_normals: np.ndarray = None,
-                          vertex_colors: np.ndarray = None):
-        """Compute all geometric and color properties of the region."""
-        if not self.is_valid or len(self.face_indices) == 0:
-            return
-        
-        # Compute centroid (average of face centroids weighted by area)
-        face_centroids = []
-        face_areas = []
-        
-        for face_idx in self.face_indices:
-            face = faces[face_idx]
-            v0, v1, v2 = vertices[face[0]], vertices[face[1]], vertices[face[2]]
-            
-            # Face centroid
-            face_centroid = (v0 + v1 + v2) / 3.0
-            face_centroids.append(face_centroid)
-            
-            # Face area
-            edge1 = v1 - v0
-            edge2 = v2 - v0
-            face_area = 0.5 * np.linalg.norm(np.cross(edge1, edge2))
-            face_areas.append(face_area)
-        
-        face_centroids = np.array(face_centroids)
-        face_areas = np.array(face_areas)
-        
-        total_area = np.sum(face_areas)
-        self.surface_area = total_area
-        
-        if total_area > 0:
-            self.centroid = np.average(face_centroids, axis=0, weights=face_areas)
-        else:
-            self.centroid = np.mean(face_centroids, axis=0)
-        
-        # Compute mean normal (weighted by face area)
-        if vertex_normals is not None:
-            face_normals = []
-            for face_idx in self.face_indices:
-                face = faces[face_idx]
-                # Average vertex normals
-                face_normal = np.mean(vertex_normals[face], axis=0)
-                face_normal = face_normal / (np.linalg.norm(face_normal) + 1e-6)
-                face_normals.append(face_normal)
-            
-            face_normals = np.array(face_normals)
-            if len(face_areas) == len(face_normals):
-                mean_normal_raw = np.average(face_normals, axis=0, weights=face_areas)
-            else:
-                mean_normal_raw = np.mean(face_normals, axis=0)
-            
-            norm = np.linalg.norm(mean_normal_raw)
-            if norm > 1e-6:
-                self.mean_normal = mean_normal_raw / norm
-            else:
-                self.mean_normal = np.array([0, 0, 1])
-        
-        # Compute mean color
-        if vertex_colors is not None:
-            vertex_list = list(self.vertex_indices)
-            region_colors = vertex_colors[vertex_list]
-            self.mean_color = np.mean(region_colors, axis=0)
-            self.color_variance = np.var(region_colors, axis=0)
-        
-        self.properties_computed = True
-    
-    def compute_boundary(self, faces: np.ndarray, adjacency: Dict[Tuple[int, int], List[int]]):
-        """
-        Compute boundary edges of this region.
-        
-        Args:
-            faces: Global face array (M, 3)
-            adjacency: Edge adjacency dictionary: edge -> list of face indices
-        """
-        self.boundary_edges = []
-        face_set = set(self.face_indices)
-        
-        for face_idx in self.face_indices:
-            face = faces[face_idx]
-            # Check all three edges of the triangle
-            edges = [
-                tuple(sorted([face[0], face[1]])),
-                tuple(sorted([face[1], face[2]])),
-                tuple(sorted([face[2], face[0]]))
-            ]
-            
-            for edge in edges:
-                adjacent_faces = adjacency.get(edge, [])
-                # Edge is on boundary if not all adjacent faces are in this region
-                adjacent_in_region = [f for f in adjacent_faces if f in face_set]
-                if len(adjacent_in_region) < len(adjacent_faces):
-                    self.boundary_edges.append(edge)
-        
-        self.is_boundary_region = len(self.boundary_edges) > 0
 
 
 class Spectator:
@@ -284,24 +122,24 @@ class Spectator:
         }
     
     def load_mask(self, mask_dir: Path) -> bool:
-        """Load wound mask for this camera view."""
+        """Load wound mask for this camera view.
+        
+        Masks are expected to be named as: image_name.jpg.png
+        For example, if image is 'image_001.jpg', mask should be 'image_001.jpg.png'
+        """
         mask_dir = Path(mask_dir)
         
-        possible_names = [
-            f"{self.image_name}.png",
-            self.image_name.replace('.jpg', '.png'),
-            self.image_name.replace('.jpeg', '.png'),
-        ]
+        # Only look for masks with the pattern: image_name.extension.png
+        mask_name = f"{self.image_name}.png"
+        mask_path = mask_dir / mask_name
         
-        for mask_name in possible_names:
-            mask_path = mask_dir / mask_name
-            if mask_path.exists():
-                import cv2
-                self.mask_data = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-                self.mask_loaded = True
-                return True
+        if mask_path.exists():
+            import cv2
+            self.mask_data = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            self.mask_loaded = True
+            return True
         
-        print(f"Warning: No mask found for {self.image_name}")
+        print(f"Warning: No mask found for {self.image_name} at {mask_path}")
         return False
     
     def project_points_to_image(self, points_3d: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -319,162 +157,6 @@ class Spectator:
         v = fy * y_cam / z_cam + cy
         
         return u, v, z_cam
-    
-    def filter_faces_through_mask(self, vertices: np.ndarray, faces: np.ndarray,
-                                  face_centers: np.ndarray = None,
-                                  vertex_colors: np.ndarray = None,
-                                  face_normals: np.ndarray = None) -> Dict[str, Any]:
-        """
-        Filter mesh faces through this camera's mask.
-        
-        Uses face-specific criteria:
-        - Face visibility (backface culling)
-        - Face center projection through mask
-        - All vertices of face must be visible
-        
-        Args:
-            vertices: Vertex array (N, 3)
-            faces: Face array (M, 3)
-            face_centers: Pre-computed face centers (M, 3)
-            vertex_colors: Vertex color array (N, 3)
-            face_normals: Face normal array (M, 3)
-            
-        Returns:
-            Dict containing filtering results and statistics
-        """
-        if not self.camera_data_loaded or not self.mask_loaded:
-            raise ValueError("Camera data and mask must be loaded")
-        
-        n_faces = len(faces)
-        all_face_indices = np.arange(n_faces)
-        valid_face_mask = np.ones(n_faces, dtype=bool)
-        
-        filtering_results = {
-            'total_faces': n_faces,
-            'visible_face_indices': [],
-            'filtered_steps': {},
-            'processing_successful': True
-        }
-        
-        # Project ALL face centers once (optimization)
-        u_all, v_all, depths_all = None, None, None
-        if face_centers is not None:
-            u_all, v_all, depths_all = self.project_points_to_image(face_centers)
-        
-        # Step 1: Backface culling (faces facing away from camera)
-        if face_normals is not None and face_centers is not None:
-            # Camera center in world coordinates
-            camera_center = -self.rotation_matrix.T @ self.translation_vector.flatten()
-            
-            # View vectors from face centers to camera
-            view_vectors = camera_center - face_centers
-            view_vectors = view_vectors / (np.linalg.norm(view_vectors, axis=1, keepdims=True) + 1e-6)
-            
-            # Dot product with face normals
-            dot_products = np.sum(view_vectors * face_normals, axis=1)
-            
-            # Backfacing if dot product <= 0
-            backfacing = dot_products <= 0
-            backfacing_indices = all_face_indices[backfacing & valid_face_mask]
-            valid_face_mask &= ~backfacing
-            filtering_results['filtered_steps']['backface_culling'] = backfacing_indices.tolist()
-        
-        # Step 2: Filter by projection constraints using pre-computed projections
-        if np.any(valid_face_mask) and u_all is not None:
-            valid_face_list = all_face_indices[valid_face_mask]
-            
-            # Use pre-computed projections (just index into arrays)
-            u = u_all[valid_face_list]
-            v = v_all[valid_face_list]
-            depths = depths_all[valid_face_list]
-            
-            # Filter behind camera
-            behind_camera = depths <= 0
-            behind_indices = valid_face_list[behind_camera]
-            valid_face_mask[behind_indices] = False
-            filtering_results['filtered_steps']['behind_camera'] = behind_indices.tolist()
-            
-            # Update valid list
-            valid_face_list = all_face_indices[valid_face_mask]
-            if len(valid_face_list) > 0:
-                # Use pre-computed projections
-                u = u_all[valid_face_list]
-                v = v_all[valid_face_list]
-                depths = depths_all[valid_face_list]
-                
-                # Filter out of bounds
-                out_of_bounds = ((u < 0) | (u >= self.image_width) | 
-                                (v < 0) | (v >= self.image_height))
-                out_bounds_indices = valid_face_list[out_of_bounds]
-                valid_face_mask[out_bounds_indices] = False
-                filtering_results['filtered_steps']['out_of_bounds'] = out_bounds_indices.tolist()
-                
-                # Update valid list again
-                valid_face_list = all_face_indices[valid_face_mask]
-                if len(valid_face_list) > 0:
-                    # Use pre-computed projections
-                    u = u_all[valid_face_list]
-                    v = v_all[valid_face_list]
-                    depths = depths_all[valid_face_list]
-                    
-                    # Check mask
-                    u_int = np.clip(u.astype(int), 0, self.mask_data.shape[1] - 1)
-                    v_int = np.clip(v.astype(int), 0, self.mask_data.shape[0] - 1)
-                    mask_values = self.mask_data[v_int, u_int]
-                    
-                    outside_mask = mask_values == 0
-                    outside_mask_indices = valid_face_list[outside_mask]
-                    valid_face_mask[outside_mask_indices] = False
-                    filtering_results['filtered_steps']['outside_mask'] = outside_mask_indices.tolist()
-        
-        # Step 3: Require all vertices of a face to be projectable and within mask
-        valid_face_list = all_face_indices[valid_face_mask]
-        additional_filtered = []
-        
-        for face_idx in valid_face_list:
-            face = faces[face_idx]
-            face_vertices = vertices[face]
-            
-            # Project all three vertices
-            u_verts, v_verts, z_verts = self.project_points_to_image(face_vertices)
-            
-            # Check if any vertex fails constraints
-            any_behind = np.any(z_verts <= 0)
-            any_out_bounds = np.any((u_verts < 0) | (u_verts >= self.image_width) |
-                                   (v_verts < 0) | (v_verts >= self.image_height))
-            
-            if any_behind or any_out_bounds:
-                additional_filtered.append(face_idx)
-                valid_face_mask[face_idx] = False
-                continue
-            
-            # Check mask for all vertices
-            u_verts_int = np.clip(u_verts.astype(int), 0, self.mask_data.shape[1] - 1)
-            v_verts_int = np.clip(v_verts.astype(int), 0, self.mask_data.shape[0] - 1)
-            mask_vals = self.mask_data[v_verts_int, u_verts_int]
-            
-            if np.any(mask_vals == 0):
-                additional_filtered.append(face_idx)
-                valid_face_mask[face_idx] = False
-        
-        filtering_results['filtered_steps']['incomplete_face_visibility'] = additional_filtered
-        
-        # Final visible faces
-        filtering_results['visible_face_indices'] = all_face_indices[valid_face_mask].tolist()
-        
-        # Store results
-        self.visible_face_indices = filtering_results['visible_face_indices']
-        self.filtered_out_faces = filtering_results['filtered_steps']
-        
-        # Extract visible vertices
-        self.visible_vertex_indices.clear()
-        for face_idx in self.visible_face_indices:
-            face = faces[face_idx]
-            self.visible_vertex_indices.update(face)
-        
-        self.faces_processed = True
-        
-        return filtering_results
     
     def get_summary(self) -> Dict[str, Any]:
         """Get summary statistics for this spectator."""
@@ -507,19 +189,20 @@ class WoundModel3DMesh:
     
     def __init__(self):
         """Initialize empty WoundModel3DMesh."""
-        # Mesh data
+        # Single primary mesh storage as Open3D TriangleMesh
+        self.mesh = None            # Full mesh (o3d.geometry.TriangleMesh)
+
+        # Derived numpy arrays (synced from self.mesh for fast access)
         self.vertices = None  # (N, 3) vertex coordinates
         self.faces = None  # (M, 3) face indices
-        self.vertex_colors = None  # (N, 3) vertex colors
+        self.vertex_colors = None  # (N, 3) vertex colors [0..1]
         self.vertex_normals = None  # (N, 3) vertex normals
         self.face_normals = None  # (M, 3) face normals
-        self.face_centers = None  # (M, 3) face center coordinates
         self._raycast_scene = None
         self._raycast_mesh_id = None
-        
-        # Mesh topology
+
+        # Mesh topology (using trimesh/O3D adjacency)
         self.edge_adjacency = {}  # edge -> list of face indices
-        self.vertex_adjacency = {}  # vertex -> list of adjacent vertices
         self.face_adjacency = {}  # face -> list of adjacent faces
         
         # Camera and image management
@@ -527,24 +210,29 @@ class WoundModel3DMesh:
         self.cameras = {}
         self.images = {}
         
-        # Face visibility tracking
-        self.face_visibility_count = {}  # face_idx -> count
-        self.wound_faces_global = set()  # Faces visible through masks
-        self.wound_vertices_global = set()  # Vertices from wound faces
+        # Face visibility tracking (indices into self.faces)
+        self.face_visibility_count = {}  # face_idx -> count of camera views
+        self.wound_face_indices = set()  # Faces visible through masks
 
-        # Wound edge data
+        # Wound edge data (all indices reference self.faces and self.vertices)
         self.wound_edge_edges = []  # List of (v0, v1) tuples
         self.wound_edge_vertices = set()  # Set of vertex indices on edge
-        self.wound_edge_faces = set()  # Wound faces adjacent to non-wound
+        self.wound_edge_face_indices = set()  # Wound faces adjacent to non-wound
 
-        # Filtering diagnostics
+        # Current filtering result (indices into self.faces)
+        self.current_wound_faces = set()  # Current wound face indices after filtering
+        
+        # Filtering diagnostics (all store face indices)
         self.removed_faces_visibility = set()
         self.removed_faces_smoothness = set()
         self.removed_faces_connectivity = set()
         self.added_faces_enclosed = set()
+        self.added_faces_closing = set()
         
-        # Connected components
-        self.wound_regions = []  # List of connected wound regions
+        # Last wound mesh results (for visualization)
+        self.last_wound_vertices = None
+        self.last_wound_faces = None
+        self.last_wound_colors = None
         
         # Model state
         self.model_loaded = False
@@ -565,40 +253,25 @@ class WoundModel3DMesh:
         
         try:
             import open3d as o3d
-            mesh = o3d.io.read_triangle_mesh(str(mesh_path))
-            
-            self.vertices = np.asarray(mesh.vertices)
-            self.faces = np.asarray(mesh.triangles)
-            
-            # Load colors if available
-            if mesh.has_vertex_colors():
-                self.vertex_colors = np.asarray(mesh.vertex_colors) # Scale to 0-255
-            
-            # Load or compute normals
-            if mesh.has_vertex_normals():
-                self.vertex_normals = np.asarray(mesh.vertex_normals)
-            elif compute_normals:
-                print("Computing vertex normals...")
-                mesh.compute_vertex_normals()
-                self.vertex_normals = np.asarray(mesh.vertex_normals)
-            
-            # Compute face normals
+            self.mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+
             if compute_normals:
-                print("Computing face normals...")
-                mesh.compute_triangle_normals()
-                self.face_normals = np.asarray(mesh.triangle_normals)
-            
-            print(f"Loaded mesh: {len(self.vertices)} vertices, {len(self.faces)} faces")
-            
+                if not self.mesh.has_vertex_normals():
+                    print("Computing vertex normals...")
+                    self.mesh.compute_vertex_normals()
+                if not self.mesh.has_triangle_normals():
+                    print("Computing face normals...")
+                    self.mesh.compute_triangle_normals()
+
         except ImportError:
-            print("Open3D not available, attempting manual PLY parsing...")
-            self._load_mesh_manual(mesh_path)
+            print("Open3D not available")
+            
+        # Sync numpy arrays from mesh
+        self._sync_arrays_from_mesh()
         
         # Build mesh topology
         self._compute_mesh_topology()
         
-        # Compute face centers (only once)
-        self._compute_face_centers()
         
         self.model_loaded = True
     
@@ -607,63 +280,48 @@ class WoundModel3DMesh:
         # Basic PLY parser for mesh data
         # This is a simplified version - expand as needed
         raise NotImplementedError("Manual mesh loading not yet implemented. Please install Open3D.")
+
+    def _sync_arrays_from_mesh(self):
+        """Sync numpy arrays from the Open3D TriangleMesh object (self.mesh)."""
+        self.vertices = np.asarray(self.mesh.vertices)
+        self.faces = np.asarray(self.mesh.triangles)
+        self.vertex_colors = np.asarray(self.mesh.vertex_colors) if self.mesh.has_vertex_colors() else None
+        self.vertex_normals = np.asarray(self.mesh.vertex_normals) if self.mesh.has_vertex_normals() else None
+        self.face_normals = np.asarray(self.mesh.triangle_normals) if self.mesh.has_triangle_normals() else None
     
     def _compute_mesh_topology(self):
-        """Compute mesh topology: edge adjacency, vertex adjacency, face adjacency."""
+        """Compute mesh topology using Open3D and numpy.
+        
+        Builds edge adjacency and face adjacency from mesh data.
+        """
         print("Computing mesh topology...")
-        
-        # Edge adjacency: each edge maps to list of faces containing it
+
+        # Build edge adjacency: edge -> list of face indices
         self.edge_adjacency = defaultdict(list)
-        
-        # Vertex adjacency: each vertex maps to adjacent vertices
-        self.vertex_adjacency = defaultdict(set)
-        
-        # Face adjacency: each face maps to adjacent faces (sharing an edge)
-        self.face_adjacency = defaultdict(list)
-        
         for face_idx, face in enumerate(self.faces):
             v0, v1, v2 = face
-            
-            # Add edges (sorted for consistency)
             edges = [
                 tuple(sorted([v0, v1])),
                 tuple(sorted([v1, v2])),
                 tuple(sorted([v2, v0]))
             ]
-            
             for edge in edges:
                 self.edge_adjacency[edge].append(face_idx)
-                # Also update vertex adjacency
-                self.vertex_adjacency[edge[0]].add(edge[1])
-                self.vertex_adjacency[edge[1]].add(edge[0])
         
         # Build face adjacency from edge adjacency
+        # Faces that share an edge are adjacent
+        self.face_adjacency = defaultdict(list)
         for edge, face_list in self.edge_adjacency.items():
             if len(face_list) >= 2:
-                # Faces sharing this edge are adjacent
+                # All faces sharing this edge are adjacent to each other
                 for i, face_i in enumerate(face_list):
                     for face_j in face_list[i+1:]:
                         self.face_adjacency[face_i].append(face_j)
                         self.face_adjacency[face_j].append(face_i)
         
+        print(f"Topology computed: {len(self.edge_adjacency)} edges, {len(self.face_adjacency)} faces with neighbors")
         self.topology_computed = True
-        print(f"Topology computed: {len(self.edge_adjacency)} edges")
-    
-    def _compute_face_centers(self):
-        """Compute face centers once for the entire mesh."""
-        print("Computing face centers...")
-        
-        if self.vertices is None or self.faces is None:
-            return
-        
-        n_faces = len(self.faces)
-        self.face_centers = np.zeros((n_faces, 3), dtype=np.float64)
-        
-        for face_idx in range(n_faces):
-            face = self.faces[face_idx]
-            self.face_centers[face_idx] = np.mean(self.vertices[face], axis=0)
-        
-        print(f"Computed {n_faces} face centers")
+
     
     def load_colmap_cameras(self, model_path: Path):
         """
@@ -715,7 +373,8 @@ class WoundModel3DMesh:
         """
         Process mesh-based wound segmentation.
         
-        Filters faces through all camera masks and builds wound regions.
+        Filters faces through all camera masks and builds wound face indices.
+        All results are stored as indices into self.faces.
         """
         if not self.model_loaded:
             raise ValueError("Mesh must be loaded first")
@@ -726,18 +385,7 @@ class WoundModel3DMesh:
         
         # Reset tracking
         self.face_visibility_count = {}
-        self.wound_faces_global = set()
-        self.wound_vertices_global = set()
-        
-        # Decide filtering mode (numpy or Open3D) once
-        filter_mode = filter_mode.lower().strip()
-        if filter_mode not in {"numpy", "open3d", "auto"}:
-            raise ValueError("filter_mode must be 'numpy', 'open3d', or 'auto'")
-
-        selected_mode = filter_mode
-       
-
-        print(f"Using filter mode: {selected_mode}")
+        self.wound_face_indices = set()
 
         # Process each spectator
         for spectator_name, spectator in self.spectators.items():
@@ -746,87 +394,22 @@ class WoundModel3DMesh:
             
             print(f"Processing spectator: {spectator_name}")
             
-            # Filter faces through mask
-            if selected_mode == "open3d":
-                self._run_open3d_filter(spectator, max_mask_rays=max_mask_rays)
-            else:
-                spectator.filter_faces_through_mask(
-                    self.vertices, self.faces, self.face_centers,
-                    self.vertex_colors, self.face_normals
-                )
-            
-            # Update global tracking
+            # Filter faces through mask using Open3D raycasting
+            self._run_open3d_filter(spectator, max_mask_rays=max_mask_rays)
+        
+            # Update global tracking (face indices)
             for face_idx in spectator.visible_face_indices:
                 self.face_visibility_count[face_idx] = self.face_visibility_count.get(face_idx, 0) + 1
-                self.wound_faces_global.add(face_idx)
-            
-            self.wound_vertices_global.update(spectator.visible_vertex_indices)
+                self.wound_face_indices.add(face_idx)
             
             print(f"  Visible faces: {len(spectator.visible_face_indices)}")
         
-        print(f"Total wound faces (any visibility): {len(self.wound_faces_global)}")
-        print(f"Total wound vertices: {len(self.wound_vertices_global)}")
+        print(f"Total wound faces (any visibility): {len(self.wound_face_indices)}")
         
         self.faces_processed = True
 
-    def _auto_select_filter_mode(self,
-                                 benchmark_cameras: int,
-                                 max_mask_rays: int,
-                                 speedup_threshold: float) -> str:
-        """Pick the faster filter mode using a small benchmark."""
-        try:
-            import open3d as _
-        except ImportError:
-            print("Open3D not available, using numpy filtering")
-            return "numpy"
 
-        candidates = [s for s in self.spectators.values() if s.mask_loaded]
-        if not candidates:
-            return "numpy"
-
-        benchmark_targets = candidates[:max(1, benchmark_cameras)]
-        numpy_time = 0.0
-        open3d_time = 0.0
-
-        for spectator in benchmark_targets:
-            state = self._snapshot_spectator_state(spectator)
-
-            start = time.perf_counter()
-            spectator.filter_faces_through_mask(
-                self.vertices, self.faces, self.face_centers,
-                self.vertex_colors, self.face_normals
-            )
-            numpy_time += time.perf_counter() - start
-            self._restore_spectator_state(spectator, state)
-
-            start = time.perf_counter()
-            self._run_open3d_filter(spectator, max_mask_rays=max_mask_rays)
-            open3d_time += time.perf_counter() - start
-            self._restore_spectator_state(spectator, state)
-
-        print(f"Benchmark time (numpy): {numpy_time:.4f}s")
-        print(f"Benchmark time (Open3D): {open3d_time:.4f}s")
-
-        if open3d_time > 0 and open3d_time <= (numpy_time / speedup_threshold):
-            return "open3d"
-
-        return "numpy"
-
-    def _snapshot_spectator_state(self, spectator: Spectator) -> Dict[str, Any]:
-        """Capture spectator filtering state for benchmarking."""
-        return {
-            "visible_face_indices": list(spectator.visible_face_indices),
-            "visible_vertex_indices": set(spectator.visible_vertex_indices),
-            "filtered_out_faces": dict(spectator.filtered_out_faces),
-            "faces_processed": spectator.faces_processed
-        }
-
-    def _restore_spectator_state(self, spectator: Spectator, state: Dict[str, Any]) -> None:
-        """Restore spectator filtering state after benchmarking."""
-        spectator.visible_face_indices = state["visible_face_indices"]
-        spectator.visible_vertex_indices = state["visible_vertex_indices"]
-        spectator.filtered_out_faces = state["filtered_out_faces"]
-        spectator.faces_processed = state["faces_processed"]
+    
 
     def _run_open3d_filter(self, spectator: Spectator, max_mask_rays: int) -> None:
         """Filter faces using Open3D raycasting through the mask."""
@@ -850,13 +433,8 @@ class WoundModel3DMesh:
         try:
             import open3d as o3d
         except ImportError:
-            print("Open3D not available, falling back to numpy filtering")
-            spectator.filter_faces_through_mask(
-                self.vertices, self.faces, self.face_centers,
-                self.vertex_colors, self.face_normals
-            )
-            return spectator.visible_face_indices
-
+            print("Open3D not available, cannot perform raycasting filter")
+            return []
         if spectator.mask_data is None or self.vertices is None or self.faces is None:
             return []
 
@@ -902,19 +480,6 @@ class WoundModel3DMesh:
         rays_t = o3d.core.Tensor(rays, dtype=o3d.core.Dtype.Float32)
         hits = self._raycast_scene.cast_rays(rays_t)
 
-        # Plot hit distances in image space (reshape to mask size)
-        # try:
-        #     import matplotlib.pyplot as plt
-        #     t_hit = hits['t_hit'].numpy()
-        #     depth_img = np.full(spectator.mask_data.shape, np.nan, dtype=np.float32)
-        #     depth_img[mask_coords[:, 0], mask_coords[:, 1]] = t_hit
-        #     plt.imshow(depth_img)
-        #     plt.colorbar()
-        #     plt.title("Hit distance (depth)")
-        #     plt.show()
-        # except Exception as e:
-        #     print(f"Depth plot skipped: {e}")
-
         prim_ids = hits['primitive_ids'].numpy()
         max_invalid = np.iinfo(prim_ids.dtype).max
         prim_ids = prim_ids[(prim_ids != max_invalid) & (prim_ids >= 0) & (prim_ids < len(self.faces))]
@@ -942,211 +507,62 @@ class WoundModel3DMesh:
             if count >= min_visibility_count
         }
         
-        print(f"Visibility filtering: {len(high_visibility_faces)}/{len(self.wound_faces_global)} faces "
+        print(f"Visibility filtering: {len(high_visibility_faces)}/{len(self.wound_face_indices)} faces "
               f"seen by >= {min_visibility_count} cameras")
         
         return high_visibility_faces
     
     def extract_connected_components(self, face_set: Set[int], min_faces: int = 10) -> List[Set[int]]:
         """
-        Extract connected components from a set of faces using mesh topology.
-        
+        Extract connected components from a set of faces.
+
+        Uses Open3D's ``cluster_connected_triangles()`` on a sub-mesh built from
+        *face_set*, which is faster than the previous hand-rolled BFS and delegates
+        all graph logic to the library.
+
         Args:
-            face_set: Set of face indices
+            face_set: Set of face indices (indices into self.faces)
             min_faces: Minimum number of faces for a valid component
-            
+
         Returns:
-            List of connected components (each is a set of face indices)
+            List of connected components (each is a set of **global** face indices)
         """
-        if not self.topology_computed:
-            raise ValueError("Mesh topology must be computed first")
-        
-        unvisited = face_set.copy()
+        import open3d as o3d
+
+        if not face_set:
+            return []
+
+        # --- Build a compact sub-mesh from the requested face subset ---
+        face_list = np.array(sorted(face_set), dtype=np.int64)
+        sub_faces_global = self.faces[face_list]          # (K, 3)
+
+        unique_verts, inv = np.unique(sub_faces_global, return_inverse=True)
+        sub_faces_local = inv.reshape(-1, 3).astype(np.int32)
+        sub_verts = self.vertices[unique_verts].astype(np.float64)
+
+        sub_mesh = o3d.geometry.TriangleMesh()
+        sub_mesh.vertices = o3d.utility.Vector3dVector(sub_verts)
+        sub_mesh.triangles = o3d.utility.Vector3iVector(sub_faces_local)
+
+        # --- Use O3D to label triangles by connected component ---
+        labels, cluster_n_triangles, _ = sub_mesh.cluster_connected_triangles()
+        labels = np.asarray(labels)  # shape (K,)
+
         components = []
-        
-        while unvisited:
-            # Start new component with arbitrary face
-            seed_face = next(iter(unvisited))
-            component = set()
-            queue = deque([seed_face])
-            
-            # BFS to find all connected faces
-            while queue:
-                current_face = queue.popleft()
-                
-                if current_face in unvisited:
-                    unvisited.remove(current_face)
-                    component.add(current_face)
-                    
-                    # Add adjacent faces that are in face_set
-                    for adj_face in self.face_adjacency.get(current_face, []):
-                        if adj_face in unvisited:
-                            queue.append(adj_face)
-            
-            # Add component if it meets minimum size
-            if len(component) >= min_faces:
-                components.append(component)
-        
+        for label in np.unique(labels):
+            local_idxs = np.where(labels == label)[0]
+            if len(local_idxs) < min_faces:
+                continue
+            global_faces = set(face_list[local_idxs].tolist())
+            components.append(global_faces)
+
         print(f"Extracted {len(components)} connected components from {len(face_set)} faces")
         return components
+
+
     
-    def filter_by_surface_smoothness(self, face_set: Set[int], 
-                                    max_curvature_variance: float = 0.5) -> Set[int]:
-        """
-        Filter faces by surface smoothness (low normal variation).
-        
-        This exploits mesh topology to identify smooth wound regions.
-        
-        Args:
-            face_set: Set of face indices to filter
-            max_curvature_variance: Maximum allowed normal angle variance
             
-        Returns:
-            Filtered set of face indices
-        """
-        if self.face_normals is None:
-            print("Warning: No face normals available for smoothness filtering")
-            return face_set
-        
-        smooth_faces = set()
-        
-        for face_idx in face_set:
-            face_normal = self.face_normals[face_idx]
-            
-            # Get adjacent faces
-            adjacent_faces = self.face_adjacency.get(face_idx, [])
-            adjacent_in_set = [f for f in adjacent_faces if f in face_set]
-            
-            if not adjacent_in_set:
-                # Isolated face, keep it
-                smooth_faces.add(face_idx)
-                continue
-            
-            # Compute normal angles with adjacent faces
-            angles = []
-            for adj_face in adjacent_in_set:
-                adj_normal = self.face_normals[adj_face]
-                dot_product = np.clip(np.dot(face_normal, adj_normal), -1.0, 1.0)
-                angle = np.arccos(dot_product)
-                angles.append(angle)
-            
-            # Check if variance is acceptable
-            if len(angles) > 0:
-                angle_variance = np.var(angles)
-                if angle_variance <= max_curvature_variance:
-                    smooth_faces.add(face_idx)
-        
-        print(f"Smoothness filtering: {len(smooth_faces)}/{len(face_set)} faces are smooth")
-        return smooth_faces
-
-    def expand_wound_by_enclosed_faces(self, wound_faces: Set[int]) -> Set[int]:
-        """Expand wound to include enclosed non-wound faces.
-
-        Any non-wound faces that are not reachable from mesh boundary without
-        crossing a wound face are treated as inside the wound region.
-        """
-        import rerun as rr
-        rr.init ("3D Wound Detection", spawn=True)
-        
-        
-        if not self.topology_computed or not wound_faces:
-            return wound_faces
-
-        boundary_faces = self._get_boundary_faces()
-        non_wound_faces = set(range(len(self.faces))) - set(wound_faces)
-
-        # Extract boundary face vertices and normals for visualization
-        if boundary_faces:
-            boundary_face_list = list(boundary_faces)
-            boundary_vertex_set = set()
-            for face_idx in boundary_face_list:
-                face = self.faces[face_idx]
-                boundary_vertex_set.update(face)
-            
-            boundary_vertex_list = sorted(list(boundary_vertex_set))
-            vertex_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(boundary_vertex_list)}
-            
-            # Extract vertex positions and normals
-            boundary_positions = self.vertices[boundary_vertex_list]
-            boundary_normals = self.vertex_normals[boundary_vertex_list] if self.vertex_normals is not None else None
-            
-            # Remap faces to new vertex indices
-            boundary_triangles = []
-            for face_idx in boundary_face_list:
-                old_face = self.faces[face_idx]
-                new_face = [vertex_remap[v] for v in old_face]
-                boundary_triangles.append(new_face)
-            
-            # Log boundary faces mesh
-            rr.log(
-                "/wound/boundary_faces",
-                rr.Mesh3D(
-                    vertex_positions=boundary_positions,
-                    vertex_normals=boundary_normals,
-                    vertex_colors=[[0, 255, 255]] * len(boundary_positions),  # Cyan
-                    triangle_indices=boundary_triangles,
-                ),
-            )
-            
-            # Log wound faces
-            wound_face_list = list(wound_faces)
-            rr.log(
-                "/wound/wound_faces",
-                rr.Mesh3D(
-                    vertex_positions=self.vertices,
-                    vertex_normals=self.vertex_normals,
-                    vertex_colors=self.vertex_colors,  
-                    triangle_indices=[self.faces[f] for f in wound_face_list],
-                ),
-            )
-
-            # Log non-wound faces
-            non_wound_face_list = list(non_wound_faces)
-            non_wound_vertex_set = set()
-            for face_idx in non_wound_face_list:
-                face = self.faces[face_idx]
-                non_wound_vertex_set.update(face)
-            
-            non_wound_vertex_list = sorted(list(non_wound_vertex_set))
-            non_wound_vertex_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(non_wound_vertex_list)}
-            
-            non_wound_positions = self.vertices[non_wound_vertex_list]
-            non_wound_normals = self.vertex_normals[non_wound_vertex_list] if self.vertex_normals is not None else None
-            
-            non_wound_triangles = []
-            for face_idx in non_wound_face_list:
-                old_face = self.faces[face_idx]
-                new_face = [non_wound_vertex_remap[v] for v in old_face]
-                non_wound_triangles.append(new_face)
-            
-            rr.log(
-                "/wound/non_wound_faces",
-                rr.Mesh3D(
-                    vertex_positions=non_wound_positions,
-                    vertex_normals=non_wound_normals,
-                    vertex_colors=[[0, 255, 30]] * len(non_wound_positions),  # Green
-                    triangle_indices=non_wound_triangles,
-                ),
-            )
-        
-        queue = deque([f for f in boundary_faces if f in non_wound_faces])
-        outside = set()
-
-        while queue:
-            face_idx = queue.popleft()
-            if face_idx in outside:
-                continue
-            outside.add(face_idx)
-
-            for adj_face in self.face_adjacency.get(face_idx, []):
-                if adj_face in non_wound_faces and adj_face not in outside:
-                    queue.append(adj_face)
-
-        enclosed_faces = non_wound_faces - outside
-        if enclosed_faces:
-            print(f"Expanded wound with {len(enclosed_faces)} enclosed faces")
-
-        return set(wound_faces) | enclosed_faces
+         
 
     def _get_boundary_faces(self) -> Set[int]:
         """Get faces on the mesh boundary (edges with only one adjacent face)."""
@@ -1155,6 +571,51 @@ class WoundModel3DMesh:
             if len(face_list) == 1:
                 boundary_faces.add(face_list[0])
         return boundary_faces
+    
+    def extract_submesh_from_faces(self, face_indices: Set[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Extract a standalone submesh from a set of face indices.
+        
+        Creates a self-contained mesh by:
+        1. Collecting all unique vertices used by the faces
+        2. Creating a compact vertex array (only used vertices)
+        3. Remapping face indices to reference the new vertex array
+        4. Extracting corresponding vertex colors
+        
+        Args:
+            face_indices: Set of face indices (referencing self.faces)
+            
+        Returns:
+            Tuple of (vertices, faces, colors) for the extracted submesh
+            - vertices: (N, 3) array of vertex positions
+            - faces: (M, 3) array of face indices (0-indexed into returned vertices)
+            - colors: (N, 3) array of vertex colors (or None if not available)
+        """
+        if not face_indices:
+            return np.array([]), np.array([]), None
+        
+        # Collect all unique vertex indices used by these faces
+        face_list = list(face_indices)
+        vertex_set = set()
+        
+        for face_idx in face_list:
+            face = self.faces[face_idx]
+            vertex_set.update(face)
+        
+        # Create sorted vertex list and remap dictionary
+        vertex_list = sorted(list(vertex_set))
+        vertex_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(vertex_list)}
+        
+        # Extract vertex positions
+        submesh_vertices = self.vertices[vertex_list]
+        
+        # Extract vertex colors if available
+        submesh_colors = self.vertex_colors[vertex_list] if self.vertex_colors is not None else None
+        
+        # Remap faces to new vertex indices
+        submesh_faces = np.array([[vertex_remap[v] for v in self.faces[fi]] for fi in face_list])
+        
+        return submesh_vertices, submesh_faces, submesh_colors
 
     def compute_wound_edge(self, wound_faces: Set[int]) -> None:
         """Compute wound edge edges and vertices from wound/non-wound boundary."""
@@ -1194,15 +655,7 @@ class WoundModel3DMesh:
         
         # Start with visibility filtering
         filtered_faces = self.filter_by_visibility(min_visibility)
-        self.removed_faces_visibility = set(self.wound_faces_global) - set(filtered_faces)
-        
-        # Apply smoothness filtering
-        if use_smoothness and len(filtered_faces) > 0:
-            pre_smooth = set(filtered_faces)
-            filtered_faces = self.filter_by_surface_smoothness(filtered_faces)
-            self.removed_faces_smoothness = pre_smooth - set(filtered_faces)
-        else:
-            self.removed_faces_smoothness = set()
+        self.removed_faces_visibility = self.wound_face_indices - filtered_faces
         
         return filtered_faces
     
@@ -1277,27 +730,62 @@ class WoundModel3DMesh:
         """
         Expand wound to include enclosed faces and extract connected components.
         
+        This solves the problem where faces inside the wound region are not marked
+        as wound faces even though they are completely enclosed by wound faces.
+        Uses flood-fill from mesh boundary to identify unreachable (enclosed) faces.
+        
         Args:
             face_set: Set of face indices to process
             use_connectivity: Whether to extract connected components
             min_component_faces: Minimum faces for valid component
             
         Returns:
-            Set of final face indices
+            Set of final face indices including enclosed faces
         """
         if not face_set:
             return face_set
         
-        # Expand wound to include enclosed faces
+        # Step 1: Expand wound to include enclosed non-wound faces
         if use_connectivity:
             pre_expand = set(face_set)
-            expanded_faces = self.expand_wound_by_enclosed_faces(face_set)
-            self.added_faces_enclosed = set(expanded_faces) - pre_expand
+            
+            # Get mesh boundary faces (edges with only one adjacent face)
+            boundary_faces = self._get_boundary_faces()
+            
+            # All non-wound faces that could potentially be enclosed
+            all_faces_set = set(range(len(self.faces)))
+            non_wound_faces = all_faces_set - face_set
+            
+            # Flood-fill from boundary through non-wound faces
+            # Faces reachable from boundary are "outside", others are "enclosed"
+            queue = deque([f for f in boundary_faces if f in non_wound_faces])
+            outside = set()
+            
+            while queue:
+                face_idx = queue.popleft()
+                if face_idx in outside:
+                    continue
+                outside.add(face_idx)
+                
+                # Explore adjacent non-wound faces
+                for adj_face in self.face_adjacency.get(face_idx, []):
+                    if adj_face in non_wound_faces and adj_face not in outside:
+                        queue.append(adj_face)
+            
+            # Enclosed faces are non-wound faces that couldn't be reached
+            enclosed_faces = non_wound_faces - outside
+            
+            if enclosed_faces:
+                print(f"Found {len(enclosed_faces)} enclosed faces, adding to wound region")
+            
+            # Combine original wound faces with enclosed faces
+            expanded_faces = face_set | enclosed_faces
+            self.added_faces_enclosed = enclosed_faces
         else:
             expanded_faces = face_set
             self.added_faces_enclosed = set()
         
-        # Extract connected components
+        # Step 2: Extract connected components and select largest
         if use_connectivity and len(expanded_faces) > 0:
             pre_connectivity = set(expanded_faces)
             components = self.extract_connected_components(expanded_faces, min_component_faces)
@@ -1306,11 +794,11 @@ class WoundModel3DMesh:
                 # Take largest component as primary wound
                 largest_component = max(components, key=len)
                 final_faces = largest_component
-                print(f"Selected largest component with {len(largest_component)} faces")
+                print(f"Selected largest component with {len(largest_component)} faces from {len(components)} components")
             else:
                 print("Warning: No valid connected components found")
                 final_faces = set()
-
+            
             self.removed_faces_connectivity = pre_connectivity - set(final_faces)
         else:
             final_faces = expanded_faces
@@ -1321,7 +809,6 @@ class WoundModel3DMesh:
     def get_wound_mesh(self, min_visibility: int = 2, 
                       use_connectivity: bool = True,
                       min_component_faces: int = 10,
-                      use_smoothness: bool = True,
                       use_closing: bool = True,
                       closing_iterations: int = 1,
                       closing_kernel_size: int = 1,
@@ -1347,16 +834,20 @@ class WoundModel3DMesh:
         if not self.faces_processed:
             raise ValueError("Must process wound segmentation first")
         
-        # Step 1: Filter by visibility and smoothness
-        filtered_faces = self.filter_wound_faces(min_visibility, use_smoothness)
-        
+        # Step 1: Filter by visibility
+        filtered_faces = self.filter_wound_faces(min_visibility)
+
         if not filtered_faces:
             print("Warning: No wound faces remain after filtering")
             return np.array([]), np.array([]), np.array([])
         
         # Step 2: Apply morphological closing
         if use_closing:
+            pre_close = set(filtered_faces)
             filtered_faces = self.morphological_closing(filtered_faces, closing_iterations, closing_kernel_size)
+            self.added_faces_closing = set(filtered_faces) - pre_close
+        else:
+            self.added_faces_closing = set()
         
         if not filtered_faces:
             print("Warning: No wound faces remain after closing")
@@ -1371,138 +862,198 @@ class WoundModel3DMesh:
             print("Warning: No wound faces remain after component extraction")
             return np.array([]), np.array([]), np.array([])
         
-        # Extract wound vertices and remap faces
-        wound_face_list = list(filtered_faces)
-        wound_vertex_set = set()
-        
-        for face_idx in wound_face_list:
-            face = self.faces[face_idx]
-            wound_vertex_set.update(face)
-        
-        wound_vertex_list = sorted(list(wound_vertex_set))
-        vertex_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(wound_vertex_list)}
-        
-        # Extract vertices and colors
-        wound_vertices = self.vertices[wound_vertex_list]
-        wound_colors = self.vertex_colors[wound_vertex_list] if self.vertex_colors is not None else None
-        
-        # Remap faces
-        wound_faces = []
-        for face_idx in wound_face_list:
-            old_face = self.faces[face_idx]
-            new_face = [vertex_remap[v] for v in old_face]
-            wound_faces.append(new_face)
-        wound_faces = np.array(wound_faces)
-        
+        # Extract wound submesh from face indices
+        wound_vertices, wound_faces, wound_colors = self.extract_submesh_from_faces(filtered_faces)
+
         # Step 4: Fill holes in the mesh (optional)
         if use_fill_holes and len(wound_vertices) > 0:
             print("Filling holes in wound mesh...")
             wound_vertices, wound_faces, wound_colors = self._fill_mesh_holes(
                 wound_vertices, wound_faces, wound_colors, hole_size
             )
-        
+
         print(f"Final wound mesh: {len(wound_vertices)} vertices, {len(wound_faces)} faces")
-        
-        # Update global tracking
-        self.wound_faces_global = filtered_faces
-        self.wound_vertices_global = wound_vertex_set
+
+        # Update global tracking with face indices in self.faces
+        self.current_wound_faces = filtered_faces
+
+        # Store last wound mesh for visualization
+        self.last_wound_vertices = wound_vertices
+        self.last_wound_faces = wound_faces
+        self.last_wound_colors = wound_colors
 
         # Compute wound edge boundary
         self.compute_wound_edge(filtered_faces)
-        
+
         return wound_vertices, wound_faces, wound_colors
+    
+    def _compute_boundary_n_edges(self, vertices: np.ndarray, faces: np.ndarray) -> int:
+        """
+        Compute n_edges parameter for pymeshfix based on longest boundary loop.
+        Returns 10% of the longest boundary loop's edge count.
+        
+        Args:
+            vertices: Vertex array (N, 3)
+            faces: Face array (M, 3)
+            
+        Returns:
+            n_edges value (at least 10)
+        """
+        # Build edge adjacency for this submesh
+        edge_count = defaultdict(int)
+        for face in faces:
+            v0, v1, v2 = face
+            edges = [(min(v0, v1), max(v0, v1)),
+                     (min(v1, v2), max(v1, v2)),
+                     (min(v2, v0), max(v2, v0))]
+            for edge in edges:
+                edge_count[edge] += 1
+        
+        # Boundary edges appear only once
+        boundary_edges = [edge for edge, count in edge_count.items() if count == 1]
+        
+        if not boundary_edges:
+            print("No boundary edges found, using default n_edges=50")
+            return 50
+        
+        # Build boundary loops
+        # Create adjacency for boundary vertices
+        boundary_adjacency = defaultdict(list)
+        for v0, v1 in boundary_edges:
+            boundary_adjacency[v0].append(v1)
+            boundary_adjacency[v1].append(v0)
+        
+        # Extract connected boundary loops
+        visited_edges = set()
+        boundary_loops = []
+        
+        for start_edge in boundary_edges:
+            if start_edge in visited_edges:
+                continue
+            
+            # Trace boundary loop
+            loop_edges = []
+            current_edge = start_edge
+            v0, v1 = current_edge
+            visited_edges.add(current_edge)
+            loop_edges.append(current_edge)
+            
+            # Follow the boundary
+            current_vertex = v1
+            while True:
+                neighbors = [v for v in boundary_adjacency[current_vertex] 
+                            if (min(current_vertex, v), max(current_vertex, v)) not in visited_edges]
+                if not neighbors:
+                    break
+                
+                next_vertex = neighbors[0]
+                edge = (min(current_vertex, next_vertex), max(current_vertex, next_vertex))
+                visited_edges.add(edge)
+                loop_edges.append(edge)
+                current_vertex = next_vertex
+                
+                if current_vertex == v0:  # Closed loop
+                    break
+            
+            if loop_edges:
+                boundary_loops.append(loop_edges)
+        
+        # Find longest boundary loop
+        if not boundary_loops:
+            print("No boundary loops found, using default n_edges=50")
+            return 50
+        
+        longest_loop = max(boundary_loops, key=len)
+        longest_loop_length = len(longest_loop)
+        
+        # Use 10% of longest boundary
+        n_edges = max(10, int(longest_loop_length * 0.1))
+        
+        print(f"Boundary analysis: {len(boundary_edges)} boundary edges, "
+              f"{len(boundary_loops)} loops, longest loop: {longest_loop_length} edges")
+        print(f"Using n_edges = {n_edges} (10% of longest boundary)")
+        
+        return n_edges
     
     def _fill_mesh_holes(self, vertices: np.ndarray, faces: np.ndarray, 
                         colors: np.ndarray = None, hole_size: float = -1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Fill holes in the mesh using trimesh's fill_holes method.
+        Fill holes in the mesh using pymeshfix.
         
         Args:
             vertices: Vertex array (N, 3)
             faces: Face array (M, 3)
             colors: Optional color array (N, 3)
-            hole_size: Maximum hole size to fill (-1.0 for all holes)
+            hole_size: Unused (kept for API compatibility)
             
         Returns:
             Tuple of (vertices, faces, colors) after hole filling
         """
         try:
-            import trimesh
-
-            if hole_size not in (-1.0, None):
-                print("Note: trimesh.fill_holes ignores hole_size and fills all holes")
-
-            colors_uint8 = None
-            if colors is not None:
-                if np.max(colors) <= 1.0:
-                    colors_uint8 = (colors * 255.0).astype(np.uint8)
-                else:
-                    colors_uint8 = colors.astype(np.uint8)
-
-            mesh = trimesh.Trimesh(
-                vertices=vertices,
-                faces=faces,
-                vertex_colors=colors_uint8,
-                process=False
-            )
-
-            initial_faces = len(mesh.faces)
-            print("Attempting to fill holes in wound mesh...")
-            added = mesh.fill_holes()
-
-            vertices_filled = np.asarray(mesh.vertices)
-            faces_filled = np.asarray(mesh.faces)
-
+            import pymeshfix
+            
+            # Compute boundary edges and find longest boundary loop
+            n_edges = self._compute_boundary_n_edges(vertices, faces)
+            
+            print(f"Filling holes with pymeshfix (n_edges={n_edges})...")
+            mfix = pymeshfix.MeshFix(vertices.copy(), faces.copy())
+            mfix.fill_holes(n_edges=n_edges)
+            
+            vertices_filled = mfix.points
+            faces_filled = mfix.faces
+            
+            # Transfer colors to new vertices using nearest neighbor
             colors_filled = colors
-            if colors_uint8 is not None and hasattr(mesh.visual, "vertex_colors"):
-                vcols = np.asarray(mesh.visual.vertex_colors)
-                if vcols.ndim == 2 and vcols.shape[1] >= 3:
-                    colors_filled = vcols[:, :3]
-
-            filled_faces = len(faces_filled)
-            print(f"Hole filling complete: {initial_faces} -> {filled_faces} faces (added {added})")
-
+            if colors is not None and len(vertices_filled) != len(vertices):
+                try:
+                    from scipy.spatial import cKDTree
+                    tree = cKDTree(vertices)
+                    _, nn_idx = tree.query(vertices_filled, k=1)
+                    colors_filled = colors[nn_idx]
+                except Exception as e:
+                    print(f"Warning: Could not transfer colors: {e}")
+                    colors_filled = None
+            
+            print(f"Hole filling complete: {len(faces)} -> {len(faces_filled)} faces")
+            
             return vertices_filled, faces_filled, colors_filled
-
+            
         except ImportError:
-            print("Trimesh not available for hole filling, returning original mesh")
+            print("pymeshfix not available, returning original mesh")
+            print("Install with: pip install pymeshfix")
             return vertices, faces, colors
         except Exception as e:
             print(f"Error during hole filling: {e}, returning original mesh")
+            import traceback
+            traceback.print_exc()
             return vertices, faces, colors
     
-    def save_wound_mesh(self, output_path: Path, vertices: np.ndarray, 
-                       faces: np.ndarray, colors: np.ndarray = None):
+    def save_wound_mesh(self, output_path: Path, vertices: np.ndarray = None,
+                       faces: np.ndarray = None, colors: np.ndarray = None):
         """
-        Save wound mesh to PLY file.
-        
+        Save mesh to PLY file.
+
         Args:
             output_path: Output PLY file path
             vertices: Vertex array (N, 3)
             faces: Face array (M, 3)
             colors: Optional color array (N, 3)
         """
+        import open3d as o3d
         output_path = Path(output_path)
-        print(f"Saving wound mesh to: {output_path}")
-        
+        print(f"Saving mesh to: {output_path}")
+
         try:
-            import open3d as o3d
-            
             mesh = o3d.geometry.TriangleMesh()
-            mesh.vertices = o3d.utility.Vector3dVector(vertices)
-            mesh.triangles = o3d.utility.Vector3iVector(faces)
-            
+            mesh.vertices = o3d.utility.Vector3dVector(vertices.astype(np.float64))
+            mesh.triangles = o3d.utility.Vector3iVector(faces.astype(np.int32))
             if colors is not None:
-                # Normalize colors to [0, 1]
-                colors_normalized = colors / 255.0 if np.max(colors) > 1.0 else colors
-                mesh.vertex_colors = o3d.utility.Vector3dVector(colors_normalized)
-            
-            # Compute normals
+                colors_01 = colors / 255.0 if np.max(colors) > 1.0 else colors.copy()
+                mesh.vertex_colors = o3d.utility.Vector3dVector(np.clip(colors_01, 0.0, 1.0))
             mesh.compute_vertex_normals()
-            
             o3d.io.write_triangle_mesh(str(output_path), mesh)
-            print(f"Saved mesh successfully")
-            
+            print("Saved mesh successfully")
+
         except ImportError:
             print("Open3D not available for mesh export")
     
@@ -1547,40 +1098,53 @@ class WoundModel3DMesh:
         
         # Create mesh entity
         if self.vertex_colors is not None:
-            colors = self.vertex_colors.astype(np.uint8)
+            colors = (self.vertex_colors * 255).astype(np.uint8) if np.max(self.vertex_colors) <= 1.0 else self.vertex_colors.astype(np.uint8)
         else:
             colors = np.ones((len(self.vertices), 3), dtype=np.uint8) * 128
         
-        # Log mesh using individual triangles (Rerun doesn't have direct mesh support yet)
-        # We'll display it as triangles
-        rr.log("/world/full_mesh", rr.Points3D(
-            positions=vertex_positions,
-            colors=colors,
-            radii=0.001
+        # Log full mesh as triangle mesh
+        rr.log("/world/full_mesh", rr.Mesh3D(
+            vertex_positions=vertex_positions,
+            triangle_indices=self.faces,
+            vertex_colors=colors
         ), static=True)
-        
-        # Log wound faces if processed
-        if self.faces_processed and self.wound_faces_global:
-            wound_face_list = list(self.wound_faces_global)
-            wound_vertex_set = set()
-            
-            for face_idx in wound_face_list:
-                face = self.faces[face_idx]
-                wound_vertex_set.update(face)
-            
-            wound_vertex_list = list(wound_vertex_set)
-            wound_positions = self.vertices[wound_vertex_list]
-            
-            if self.vertex_colors is not None:
-                wound_colors = self.vertex_colors[wound_vertex_list]
+
+        # Log final segmented wound mesh on the full mesh
+        if self.last_wound_vertices is not None and self.last_wound_faces is not None:
+            if self.last_wound_colors is not None:
+                wound_colors_full = (self.last_wound_colors * 255).astype(np.uint8) if np.max(self.last_wound_colors) <= 1.0 else self.last_wound_colors.astype(np.uint8)
             else:
-                wound_colors = np.array([[255, 0, 0]] * len(wound_vertex_list))  # Red
-            
-            rr.log("/wound/vertices", rr.Points3D(
-                positions=wound_positions,
-                colors=wound_colors,
-                radii=0.002
+                wound_colors_full = np.ones((len(self.last_wound_vertices), 3), dtype=np.uint8) * 0
+                wound_colors_full[:, 1] = 255  # Green
+            rr.log("/world/segmented_wound", rr.Mesh3D(
+                vertex_positions=self.last_wound_vertices.astype(np.float32),
+                triangle_indices=self.last_wound_faces,
+                vertex_colors=wound_colors_full
             ), static=True)
+        
+        # Log wound faces by step in Wound Region
+        if self.faces_processed and self.wound_face_indices:
+            # Initial wound mesh
+            wound_verts, wound_faces_idx, wound_colors_init = self.extract_submesh_from_faces(self.wound_face_indices)
+            if len(wound_verts) > 0:
+                if wound_colors_init is None:
+                    wound_colors_init = np.ones((len(wound_verts), 3), dtype=np.uint8) * 200
+                else:
+                    wound_colors_init = (wound_colors_init * 255).astype(np.uint8) if np.max(wound_colors_init) <= 1.0 else wound_colors_init.astype(np.uint8)
+                rr.log("/wound/initial", rr.Mesh3D(
+                    vertex_positions=wound_verts.astype(np.float32),
+                    triangle_indices=wound_faces_idx,
+                    vertex_colors=wound_colors_init
+                ), static=True)
+
+            # Removed faces by filtering step
+            self._log_faces_mesh_rr(rr, "/wound/removed/visibility", self.removed_faces_visibility, [255, 0, 0])
+            self._log_faces_mesh_rr(rr, "/wound/removed/smoothness", self.removed_faces_smoothness, [0, 128, 255])
+            self._log_faces_mesh_rr(rr, "/wound/removed/connectivity", self.removed_faces_connectivity, [255, 128, 0])
+
+            # Added/filled faces
+            self._log_faces_mesh_rr(rr, "/wound/added/enclosed", self.added_faces_enclosed, [0, 255, 0])
+            self._log_faces_mesh_rr(rr, "/wound/added/closing", self.added_faces_closing, [0, 200, 0])
 
         # Log wound edge vertices and edges
         if self.wound_edge_vertices:
@@ -1597,24 +1161,19 @@ class WoundModel3DMesh:
             edge_strips = []
             for v0, v1 in self.wound_edge_edges:
                 edge_strips.append(np.array([self.vertices[v0], self.vertices[v1]], dtype=np.float32))
-            rr.log("/wound/edge_edges", rr.LineStrips3D(
-                strips=edge_strips,
-                colors=[[255, 255, 0]] * len(edge_strips),
-                radii=0.0008
-            ), static=True)
+            if edge_strips:
+                rr.log("/wound/edge_edges", rr.LineStrips3D(
+                    strips=edge_strips,
+                    colors=[[255, 255, 0]] * len(edge_strips),
+                    radii=0.002
+                ), static=True)
 
-        # Log removed faces by filtering steps
-        self._log_removed_faces_rr(rr, "/wound/removed/visibility", self.removed_faces_visibility, [160, 160, 160])
-        self._log_removed_faces_rr(rr, "/wound/removed/smoothness", self.removed_faces_smoothness, [0, 128, 255])
-        self._log_removed_faces_rr(rr, "/wound/removed/connectivity", self.removed_faces_connectivity, [255, 128, 0])
-        
         # Log statistics
         stats_text = f"""
 Mesh Statistics:
 - Total Vertices: {len(self.vertices):,}
 - Total Faces: {len(self.faces):,}
-- Wound Faces: {len(self.wound_faces_global):,}
-- Wound Vertices: {len(self.wound_vertices_global):,}
+- Wound Faces: {len(self.wound_face_indices):,}
 - Spectators: {len(self.spectators)}
 - Masks Loaded: {sum(1 for s in self.spectators.values() if s.mask_loaded)}
         """
@@ -1623,22 +1182,24 @@ Mesh Statistics:
         
         print(f"Rerun visualization started: {session_name}")
 
-    def _log_removed_faces_rr(self, rr, path: str, face_set: Set[int], color: List[int]) -> None:
-        """Log vertices from a face set for visualization in Rerun."""
+    def _log_faces_mesh_rr(self, rr, path: str, face_set: Set[int], color: List[int]) -> None:
+        """Log a mesh from a set of face indices for visualization in Rerun."""
         if not face_set:
             return
-        vertex_set = set()
-        for face_idx in face_set:
-            face = self.faces[face_idx]
-            vertex_set.update(face)
-
-        vertex_list = list(vertex_set)
-        positions = self.vertices[vertex_list]
-        colors = np.array([color] * len(vertex_list), dtype=np.uint8)
-        rr.log(path, rr.Points3D(
-            positions=positions,
-            colors=colors,
-            radii=0.0018
+        
+        # Extract submesh from face indices
+        submesh_verts, submesh_faces, _ = self.extract_submesh_from_faces(face_set)
+        
+        if len(submesh_verts) == 0:
+            return
+        
+        # Create uniform color for all vertices
+        colors = np.array([color] * len(submesh_verts), dtype=np.uint8)
+        
+        rr.log(path, rr.Mesh3D(
+            vertex_positions=submesh_verts.astype(np.float32),
+            triangle_indices=submesh_faces,
+            vertex_colors=colors
         ), static=True)
     
     def get_statistics(self) -> Dict[str, Any]:
@@ -1655,8 +1216,7 @@ Mesh Statistics:
         }
         
         if self.faces_processed:
-            stats['wound_faces_count'] = len(self.wound_faces_global)
-            stats['wound_vertices_count'] = len(self.wound_vertices_global)
+            stats['wound_faces_count'] = len(self.wound_face_indices)
             
             if self.face_visibility_count:
                 counts = list(self.face_visibility_count.values())
@@ -1676,11 +1236,11 @@ def main():
     """
     
     # Example paths (adjust to your data)
-    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense\poisson.ply")
-    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense")
-    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\mask_wound_only_undistorted\images")
-    output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense\wound_mesh.ply")
-    output_path_corrected = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\dense\wound_mesh_corrected.ply")
+    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\poisson.ply")
+    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
+    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_wound_only_undistorted")
+    output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\wound_mesh.ply")
+    output_path_corrected = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\wound_mesh_corrected.ply")
     
     
     # mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\dense\poisson.ply")
@@ -1718,11 +1278,10 @@ def main():
             min_visibility=3,  # Require visibility from multiple cameras
             use_connectivity=True,  # Extract connected components
             min_component_faces=100,  # Minimum size for valid component
-            use_smoothness=False,  # Filter by surface smoothness
-            use_closing=False,  # Apply morphological closing
+            use_closing=True,  # Apply morphological closing
             closing_iterations=5,  # Number of closing iterations
             closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
-            use_fill_holes=True,  # We'll use trimesh instead in correction step
+            use_fill_holes=False,  # We'll use trimesh instead in correction step
             hole_size=-1.0
         )
         
@@ -1731,36 +1290,12 @@ def main():
         print(f"Vertices: {len(wound_vertices)}")
         print(f"Faces: {len(wound_faces)}")
         
-        # Correct and close wound mesh
-        print("\n=== Correcting and Closing Wound Mesh ===")
-        corrected_vertices, corrected_faces, corrected_colors = correct_wound_mesh_from_detection(
-            wound_vertices, wound_faces, wound_colors,
-            full_vertices=wound_model.vertices,
-            full_faces=wound_model.faces,
-            simplify_full_mesh=True,  # Only simplify if mesh is very large (300k+ vertices)
-            verbose=True
-        )
         
-        # Get corrected statistics
-        print("\n=== Corrected Wound Mesh Statistics ===")
-        print(f"Vertices: {len(corrected_vertices)}")
-        print(f"Faces: {len(corrected_faces)}")
-        
-        # Use corrected mesh for output
-        wound_vertices = corrected_vertices
-        wound_faces = corrected_faces
-        if wound_colors is not None and corrected_colors is not None:
-            wound_colors = corrected_colors
-        # if len(wound_vertices) > 0:
         #     print("\n=== Saving Meshes ===")
-        #     wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
-        #     print(f"Saved initial wound mesh to: {output_path}")
-        
-        # if len(corrected_vertices) > 0:
-        #     wound_model.save_wound_mesh(output_path_corrected, corrected_vertices, corrected_faces, corrected_colors)
-        #     print(f"Saved corrected wound mesh to: {output_path_corrected}")
-        
-        # Visualize
+        wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
+        print(f"Saved initial wound mesh to: {output_path}")
+    
+    
         # print("\n=== Launching Visualization ===")
         wound_model.visualize_with_rerun("WoundModel3DMesh_Main")
         
