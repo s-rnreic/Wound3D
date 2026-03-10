@@ -87,7 +87,7 @@ class Spectator:
         # Face visibility tracking (mesh-specific)
         self.visible_face_indices = []  # Faces visible through mask
         self.visible_vertex_indices = set()  # Vertices from visible faces
-        self.tissue_edge_face_indices = []  # Faces in the tissue edge (mask difference)
+        self.periwound_edge_face_indices = []  # Faces in the periwound region (mask difference)
         self.filtered_out_faces = {}  # Dict: filter_name -> list of filtered face indices
         
         # Processing flags
@@ -149,7 +149,7 @@ class Spectator:
         """Load extruded/extended wound mask for this camera view.
         
         Extruded masks are expected to use the same naming convention as regular masks.
-        The difference between extruded and regular masks defines the tissue edge region.
+        The difference between extruded and regular masks defines the periwound region.
         """
         extruded_mask_dir = Path(extruded_mask_dir)
         mask_name = f"{self.image_name}.png"
@@ -234,33 +234,35 @@ class WoundModel3DMesh:
         
         # Face visibility tracking (indices into self.faces)
         self.face_visibility_count = {}  # face_idx -> count of camera views
-        self.wound_face_indices = set()  # Faces visible through masks
+        self.wound_face_indices = set()  # Faces visible through wound masks
+        self.tissue_face_indices = set()  # Faces from extended_wound_mask - wound_mask (initial periwound)
         
-        # Tissue edge tracking (faces in mask difference region)
-        self.tissue_edge_faces = set()  # Faces detected in tissue edge region
-        self.tissue_edge_visibility_count = {}  # face_idx -> count of cameras seeing tissue edge
-        self.tissue_edge_mean_color = {}  # face_idx -> mean color [R, G, B]
-        self.tissue_edge_color_std = {}  # face_idx -> color std dev
-        self.tissue_edge_camera_data = {}  # face_idx -> list of per-camera measurements
+        # Periwound tracking (boundary region detected from mask difference)
+        self.periwound_edge_faces = set()  # Faces detected in periwound region
+        self.periwound_edge_visibility_count = {}  # face_idx -> count of cameras seeing periwound
+        self.periwound_edge_mean_color = {}  # face_idx -> mean color [R, G, B]
+        self.periwound_edge_color_std = {}  # face_idx -> color std dev
+        self.periwound_edge_camera_data = {}  # face_idx -> list of per-camera measurements
         
         # Confidence maps based on visibility
         self.wound_confidence_map = {}  # face_idx -> confidence [0-1] based on wound visibility
-        self.tissue_edge_confidence_map = {}  # face_idx -> confidence [0-1] based on tissue edge visibility
-        self.overlapping_faces = set()  # Faces seen in both wound and tissue edge
+        self.periwound_edge_confidence_map = {}  # face_idx -> confidence [0-1] based on periwound visibility
+        self.overlapping_faces = set()  # Faces seen in both wound and periwound
         self.overlapping_wound_counts = {}  # face_idx -> wound visibility count for overlapping faces
-        self.overlapping_tissue_counts = {}  # face_idx -> tissue edge visibility count for overlapping faces
+        self.overlapping_tissue_counts = {}  # face_idx -> periwound visibility count for overlapping faces
 
         # Semantic classification (feature-based confidence)
         self.semantic_feature_names = []  # List of feature names
         self.semantic_face_indices = []  # Faces used for semantic classification
         self.semantic_features = None  # (N, D) feature matrix for semantic classification
-        self.semantic_posteriors = {}  # face_idx -> np.array([p_tissue, p_edge, p_wound])
+        self.semantic_features_raw = None  # (N, D) unstandardized feature matrix for visualization
+        self.semantic_posteriors = {}  # face_idx -> np.array([p_tissue, p_periwound, p_wound])
         self.semantic_posteriors_before_mrf = {}  # face_idx -> posteriors before MRF constraints
-        self.semantic_labels = {}  # face_idx -> label string
+        self.semantic_labels = {}  # face_idx -> label string ("tissue", "periwound", or "wound")
         self.semantic_confidence = {}  # face_idx -> confidence [0-1]
-        self.semantic_class_names = ["tissue", "wound_edge", "wound"]
+        self.semantic_class_names = ["tissue", "periwound", "wound"]  # 3-class classification
         self.semantic_wound_prob = {}  # face_idx -> P(wound)
-        self.semantic_edge_prob = {}  # face_idx -> P(wound_edge)
+        self.semantic_periwound_prob = {}  # face_idx -> P(periwound)
         self.semantic_tissue_prob = {}  # face_idx -> P(tissue)
         
         # Intermediate data for visualization (feature extraction & GMM stages)
@@ -268,11 +270,16 @@ class WoundModel3DMesh:
         self.semantic_class_samples = {}  # class_name -> list of face indices in each class
         self.semantic_gmm_models = {}  # Stored GMM models for visualization
         self.semantic_feature_colormaps = {}  # feature_name -> dict of {face_idx: color}
+        self.semantic_log_likelihoods = None  # (N, C) raw log-likelihoods from GMM (before softmax)
+        self.semantic_wound_loglik = {}  # face_idx -> log P(features | wound)
+        self.semantic_tissue_loglik = {}  # face_idx -> log P(features | tissue)
+        self.semantic_mrf_posteriors = {}  # face_idx -> np.array([p_tissue, p_periwound, p_wound]) after MRF (mean field only)
+        self.semantic_mrf_method = None  # "graph_cut" or "mean_field"
 
-        # Wound edge data (all indices reference self.faces and self.vertices)
-        self.wound_edge_edges = []  # List of (v0, v1) tuples
-        self.wound_edge_vertices = set()  # Set of vertex indices on edge
-        self.wound_edge_face_indices = set()  # Wound faces adjacent to non-wound
+        # Wound edge data (boundary region between wound and tissue - computed after classification)
+        self.wound_edge_edges = []  # List of (v0, v1) tuples on wound-tissue boundary
+        self.wound_edge_vertices = set()  # Set of vertex indices on boundary
+        self.wound_edge_face_indices = set()  # Faces adjacent to both wound and tissue
 
         # Current filtering result (indices into self.faces)
         self.current_wound_faces = set()  # Current wound face indices after filtering
@@ -299,6 +306,8 @@ class WoundModel3DMesh:
         self._face_centroids_cache = None
         self._face_neighbors_cache = {}
         self._trimesh_cache = None
+        self._feature_mean = None
+        self._feature_std = None
     
     def load_mesh(self, mesh_path: Path, compute_normals: bool = True):
         """
@@ -379,13 +388,25 @@ class WoundModel3DMesh:
 
             # Build edge adjacency: edge -> list of face indices
             self.edge_adjacency = defaultdict(list)
-            edges = self._trimesh_cache.edges_unique
-            edges_faces = self._trimesh_cache.edges_unique_faces
-            for edge, faces in zip(edges, edges_faces):
-                face_list = [int(f) for f in faces if f != -1]
-                if not face_list:
-                    continue
-                self.edge_adjacency[tuple(sorted([int(edge[0]), int(edge[1])]))] = face_list
+            edges_unique = np.asarray(self._trimesh_cache.edges_unique, dtype=np.int64)
+            edges_unique_inverse = np.asarray(self._trimesh_cache.edges_unique_inverse, dtype=np.int64)
+
+            if edges_unique_inverse.size != 3 * len(self.faces):
+                raise ValueError("Unexpected edges_unique_inverse shape; cannot map faces to edges")
+
+            for face_idx, face in enumerate(self.faces):
+                face_edges = (
+                    (int(face[0]), int(face[1])),
+                    (int(face[1]), int(face[2])),
+                    (int(face[2]), int(face[0])),
+                )
+                base = face_idx * 3
+                for local_offset, _ in enumerate(face_edges):
+                    unique_edge_idx = int(edges_unique_inverse[base + local_offset])
+                    if unique_edge_idx < 0 or unique_edge_idx >= len(edges_unique):
+                        continue
+                    edge_vertices = tuple(sorted(edges_unique[unique_edge_idx].tolist()))
+                    self.edge_adjacency[edge_vertices].append(face_idx)
 
             print(
                 f"Topology computed (trimesh): {len(self.edge_adjacency)} edges, "
@@ -606,14 +627,12 @@ class WoundModel3DMesh:
 
         return np.unique(prim_ids).tolist()
     
-    def process_tissue_edge_detection(self, max_mask_rays: int = 200000):
+    def process_tissue_face_detection(self, max_mask_rays: int = 200000):
         """
-        Detect tissue edge faces from the difference between wound masks and extruded masks.
+        Detect tissue faces from the difference between extended masks and wound masks.
         
-        For each spectator, the tissue edge is defined as pixels in the extruded mask
-        but not in the wound mask. These are projected onto the mesh and corresponding
-        faces are marked as tissue edge faces. Statistics (visibility count, color, std)
-        are computed across all cameras.
+        Tissue faces are defined as pixels in the extended_wound_mask but NOT in the wound_mask.
+        These represent the initial tissue region (boundary tissue around the wound).
         
         Args:
             max_mask_rays: Maximum number of rays to cast per camera (for performance)
@@ -622,79 +641,76 @@ class WoundModel3DMesh:
             raise ValueError("Mesh must be loaded first")
         
         if not any(s.extruded_mask_loaded for s in self.spectators.values()):
-            print("Warning: No extruded masks loaded, skipping tissue edge detection")
+            print("Warning: No extruded masks loaded. Cannot detect tissue faces.")
             return
         
-        print(f"Processing tissue edge detection from mask differences...")
+        print(f"Processing periwound face detection from mask differences...")
         
-        # Reset tracking
-        self.tissue_edge_faces = set()
-        self.tissue_edge_visibility_count = {}
-        self.tissue_edge_mean_color = {}
-        self.tissue_edge_color_std = {}
-        self.tissue_edge_camera_data = {}
+        # Reset tracking (tissue_face_indices for initial periwound detection)
+        self.tissue_face_indices = set()
+        periwound_visibility_count = {}
         
         # Process each spectator
         for spectator_name, spectator in self.spectators.items():
-            if not spectator.extruded_mask_loaded or spectator.mask_data is None:
+            if not spectator.extruded_mask_loaded:
                 continue
             
-            print(f"Processing tissue edge for: {spectator_name}")
-            
-            # Compute difference mask: extruded - wound = tissue edge region
-            difference_mask = np.zeros_like(spectator.mask_data, dtype=np.uint8)
-            difference_mask[(spectator.extruded_mask_data > 0) & (spectator.mask_data == 0)] = 255
+            # Create difference mask: extruded_mask AND NOT wound_mask
+            # Guard against missing wound mask: treat entire extruded mask as periwound
+            difference_mask = np.zeros_like(spectator.extruded_mask_data, dtype=np.uint8)
+            if spectator.mask_data is not None:
+                difference_mask[(spectator.extruded_mask_data > 0) & (spectator.mask_data == 0)] = 255
+            else:
+                difference_mask[spectator.extruded_mask_data > 0] = 255
             
             # Test if there's anything in the difference
             if np.sum(difference_mask) == 0:
-                print(f"  No tissue edge pixels found for {spectator_name}")
+                print(f"  No periwound pixels found for {spectator_name}")
                 continue
             
-            # Project tissue edge mask to mesh faces
-            tissue_edge_faces = self._filter_faces_with_mask(
+            # Project periwound mask to mesh faces
+            periwound_faces = self._filter_faces_with_mask(
                 spectator=spectator,
                 mask=difference_mask,
                 max_mask_rays=max_mask_rays
             )
             
-            # Extract per-camera color and pixel data from the tissue edge region
-            tissue_edge_pixels = np.argwhere(difference_mask > 0)
+            # Update global periwound tracking
+            for face_idx in periwound_faces:
+                self.tissue_face_indices.add(face_idx)
+                periwound_visibility_count[face_idx] = periwound_visibility_count.get(face_idx, 0) + 1
             
-            # Update global tissue edge tracking
-            for face_idx in tissue_edge_faces:
-                self.tissue_edge_faces.add(face_idx)
-                self.tissue_edge_visibility_count[face_idx] = self.tissue_edge_visibility_count.get(face_idx, 0) + 1
-                
-                if face_idx not in self.tissue_edge_camera_data:
-                    self.tissue_edge_camera_data[face_idx] = []
-            
-            print(f"  Tissue edge faces detected: {len(tissue_edge_faces)}")
+            print(f"  Periwound faces detected: {len(periwound_faces)}")
         
-        # Compute statistics across all cameras
-        print(f"\nComputing tissue edge statistics...")
-        for face_idx in self.tissue_edge_faces:
-            self._compute_tissue_edge_face_stats(face_idx)
+        # Store visibility counts
+        self.periwound_edge_visibility_count = periwound_visibility_count
         
-        print(f"Total tissue edge faces detected: {len(self.tissue_edge_faces)}")
-        print(f"  Average visibility: {np.mean(list(self.tissue_edge_visibility_count.values())):.2f} cameras")
-    
+        # Maintain backwards compatibility: periwound_edge_faces is same as tissue_face_indices in 2-class model
+        self.periwound_edge_faces = self.tissue_face_indices.copy()
+        
+        print(f"Total periwound faces detected: {len(self.tissue_face_indices)}")
+        if periwound_visibility_count:
+            print(f"  Average visibility: {np.mean(list(periwound_visibility_count.values())):.2f} cameras")
+
+
 
     def _get_total_views(self, face_idx: int) -> int:
-        """Return total projections for a face based on max visibility count.
+        """Return total independent projections for a face.
 
-        Note: As requested, total views is the max of wound and tissue edge hits.
+        Uses sum of wound and periwound hits so that visibility ratios
+        are coherent (r_wound + r_periwound <= 1.0).
         """
         wound_hits = self.face_visibility_count.get(face_idx, 0)
-        edge_hits = self.tissue_edge_visibility_count.get(face_idx, 0)
-        return max(wound_hits, edge_hits)
+        edge_hits = self.periwound_edge_visibility_count.get(face_idx, 0)
+        return wound_hits + edge_hits
 
     def _compute_visibility_ratios(self, face_idx: int) -> Tuple[float, float, int]:
-        """Compute wound and edge visibility ratios for a face."""
+        """Compute wound and periwound visibility ratios for a face."""
         total_views = self._get_total_views(face_idx)
         if total_views <= 0:
             return 0.0, 0.0, 0
         wound_hits = self.face_visibility_count.get(face_idx, 0)
-        edge_hits = self.tissue_edge_visibility_count.get(face_idx, 0)
+        edge_hits = self.periwound_edge_visibility_count.get(face_idx, 0)
         r_wound = wound_hits / total_views
         r_edge = edge_hits / total_views
         return r_wound, r_edge, total_views
@@ -719,17 +735,36 @@ class WoundModel3DMesh:
             self._face_centroids_cache = (v0 + v1 + v2) / 3.0
         return self._face_centroids_cache
 
-    def _fit_plane(self, points: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Fit a plane to points and return (normal, d) for ax+by+cz+d=0."""
+    def _fit_plane(self,
+                   points: np.ndarray,
+                   face_normals: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float]:
+        """Fit a plane and orient it to align with the supplied face_normals if provided."""
         if points is None or len(points) < 3:
             return np.array([0.0, 0.0, 1.0], dtype=np.float64), 0.0
-        centroid = np.mean(points, axis=0)
-        centered = points - centroid
-        cov = centered.T @ centered
-        _, _, vh = np.linalg.svd(cov)
-        normal = vh[-1]
+
+        normal = None
+        origin = None
+
+        if normal is None or origin is None:
+            centroid = np.mean(points, axis=0)
+            centered = points - centroid
+            cov = centered.T @ centered
+            _, _, vh = np.linalg.svd(cov)
+            normal = vh[-1]
+            origin = centroid
+
         normal = normal / (np.linalg.norm(normal) + 1e-9)
-        d = -np.dot(normal, centroid)
+
+        if face_normals is not None and len(face_normals) > 0:
+            face_normals = np.asarray(face_normals, dtype=np.float64)
+            mean_normal = np.mean(face_normals, axis=0)
+            mean_norm = np.linalg.norm(mean_normal)
+            if mean_norm > 1e-9:
+                mean_normal /= mean_norm
+                if np.dot(normal, mean_normal) < 0:
+                    normal = -normal
+
+        d = -np.dot(normal, origin)
         return normal, d
 
     def _get_face_neighbors_ring(self, face_idx: int, ring: int) -> Set[int]:
@@ -779,6 +814,60 @@ class WoundModel3DMesh:
             deviations[face_idx] = devs
         return deviations
 
+    def _compute_mesh_curvature(self,
+                                face_indices: List[int],
+                                centroids: np.ndarray,
+                                plane_normal: np.ndarray,
+                                plane_d: float,
+                                ratio_cache: Dict[int, Tuple[float, float, int]],
+                                wound_r_thresh: float = 0.5) -> np.ndarray:
+        """Compute scale-adaptive discrete mean curvature for each face.
+
+        The neighbourhood ring size is derived from the estimated wound area so
+        that the curvature captures the *global* concavity of an indentation
+        rather than local surface noise.
+
+        For every face the curvature value is the Laplacian-style difference
+        between the face's signed height (distance to the fitted tissue plane)
+        and the mean signed height of all neighbours within the adaptive ring.
+        Negative values indicate a concave region (indentation / wound),
+        positive values indicate a convex region (protrusion).
+
+        Args:
+            face_indices: List of face indices to compute curvature for.
+            centroids: (M, 3) face centroids for the full mesh.
+            plane_normal: Normal of the fitted tissue reference plane.
+            plane_d: Offset d of the plane equation  n · x + d = 0.
+            ratio_cache: {face_idx: (r_wound, r_tissue, total_views)}.
+            wound_r_thresh: r_wound threshold used to estimate wound scale.
+
+        Returns:
+            curvature: (len(face_indices),) array of curvature values.
+        """
+        # --- Estimate wound scale as adaptive ring radius ---
+        n_wound_faces = sum(
+            1 for f in face_indices if ratio_cache.get(f, (0, 0, 0))[0] > wound_r_thresh
+        )
+        # Heuristic: ring ~ sqrt(wound_faces) / 2, clamped to [2, 40]
+        adaptive_ring = int(np.clip(np.sqrt(max(n_wound_faces, 1)) / 2.0, 2, 40))
+        print(f"  Curvature adaptive ring = {adaptive_ring}  "
+              f"(wound faces with r_wound > {wound_r_thresh}: {n_wound_faces})")
+
+        # Signed height of every face relative to the tissue plane
+        signed_height = centroids @ plane_normal + plane_d  # (M,)
+
+        curvature = np.zeros(len(face_indices), dtype=np.float64)
+        for i, face_idx in enumerate(face_indices):
+            neighbors = self._get_face_neighbors_ring(face_idx, adaptive_ring)
+            if not neighbors or len(neighbors) <= 1:
+                curvature[i] = 0.0
+                continue
+            neighbor_heights = np.array([signed_height[n] for n in neighbors], dtype=np.float64)
+            # Laplacian curvature: own height minus neighbourhood mean
+            curvature[i] = signed_height[face_idx] - np.mean(neighbor_heights)
+
+        return curvature
+
     def _compute_normal_deviation(self,
                                   face_normals: np.ndarray,
                                   plane_normal: np.ndarray) -> np.ndarray:
@@ -788,14 +877,87 @@ class WoundModel3DMesh:
         dots = np.clip(dots, -1.0, 1.0)
         return np.arccos(dots)
 
+    def _rgb_to_lab(self, rgb: np.ndarray) -> np.ndarray:
+        """Convert RGB color [0-1] to LAB color space."""
+        # Ensure RGB is in [0, 1]
+        rgb_normalized = np.clip(rgb, 0, 1).astype(np.float64)
+        
+        # RGB to XYZ
+        # Apply inverse sRGB companding
+        mask = rgb_normalized > 0.04045
+        linear_rgb = np.where(mask, np.power((rgb_normalized + 0.055) / 1.055, 2.4), rgb_normalized / 12.92)
+        
+        # XYZ transform matrix (D65 illuminant)
+        transform_matrix = np.array([
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041]
+        ])
+        
+        xyz = linear_rgb @ transform_matrix.T
+        
+        # Normalize by D65 white point
+        xyz_normalized = xyz / np.array([0.95047, 1.00000, 1.08883])
+        
+        # XYZ to LAB
+        delta = 6.0 / 29.0
+        mask_xyz = xyz_normalized > (delta ** 3)
+        f = np.where(mask_xyz, np.cbrt(xyz_normalized), xyz_normalized / (3 * delta ** 2) + 4.0 / 29.0)
+        
+        L = 116 * f[1] - 16
+        a = 500 * (f[0] - f[1])
+        b = 200 * (f[1] - f[2])
+        
+        return np.array([L, a, b], dtype=np.float32)
+    
+    def _rgb_to_ydrdb(self, rgb: np.ndarray) -> np.ndarray:
+        """Convert RGB color [0-1] to YDrDb color space.
+        
+        Returns: [Y, Dr, Db] array
+        
+        Transformation matrix:
+        Y  =  0.299*R + 0.587*G + 0.114*B
+        Db = -0.450*R - 0.883*G + 1.333*B
+        Dr = -1.333*R + 1.116*G + 0.217*B
+        """
+        # Ensure RGB is in [0, 1]
+        rgb_normalized = np.clip(rgb, 0, 1).astype(np.float64)
+        
+        # YDrDb transform matrix
+        transform_matrix = np.array([
+            [ 0.299,  0.587,  0.114],  # Y
+            [-0.450, -0.883,  1.333],  # Db
+            [-1.333,  1.116,  0.217]   # Dr
+        ])
+        
+        ydrdb = rgb_normalized @ transform_matrix.T
+        
+        return np.array([ydrdb[0], ydrdb[1], ydrdb[2]], dtype=np.float32)
+
     def _build_feature_vectors(self,
-                               tissue_ratio_thresh: float = 0.05,
-                               wound_ratio_thresh: float = 0.6,
-                               edge_ratio_thresh: float = 0.6,
-                               min_total_views: int = 1,
-                               tissue_visibility_percentile: float = 70.0,
-                               ring_sizes: List[int] = None) -> Tuple[np.ndarray, List[int], Dict[int, Tuple[float, float, int]]]:
-        """Build feature vectors for semantic classification."""
+                               periwound_candidate_wound_thresh: float = 0.1,
+                               periwound_candidate_top_percent: float = 20.0,
+                               ring_sizes: List[int] = None,
+                               use_ratio_features: bool = True,
+                               use_height_deviation: bool = True,
+                               use_normal_deviation: bool = True,
+                               use_curvature: bool = True,
+                               use_centroid_features: bool = True,
+                               color_space: str = "lab_b") -> Tuple[np.ndarray, List[int], Dict[int, Tuple[float, float, int]]]:
+        """Build feature vectors for semantic classification.
+        
+        Args:
+            periwound_candidate_wound_thresh: Maximum r_wound for periwound seed selection
+            periwound_candidate_top_percent: Select periwound candidates from the top X% of
+                the r_periwound distribution (e.g. 20.0 means the 80th-percentile threshold)
+            min_total_views: Minimum views for a face to be included
+            tissue_visibility_percentile: Percentile for selecting high-vis tissue seed faces
+            ring_sizes: Ring sizes for multi-scale height deviation
+            use_height_deviation: Include height deviation features
+            use_normal_deviation: Include normal deviation features
+            use_curvature: Include scale-adaptive discrete mean curvature feature
+            color_space: Color space to use: "none", "rgb", "lab_b" (LAB b-channel only), or "ydrdb" (Dr and Db only)
+        """
         if ring_sizes is None:
             ring_sizes = [1, 3]
 
@@ -805,78 +967,178 @@ class WoundModel3DMesh:
         face_indices = []
         ratio_cache = {}
         for face_idx in range(len(self.faces)):
-            r_wound, r_edge, total_views = self._compute_visibility_ratios(face_idx)
-            ratio_cache[face_idx] = (r_wound, r_edge, total_views)
-            if total_views >= min_total_views:
-                face_indices.append(face_idx)
+            wound_visibility = self.face_visibility_count.get(face_idx, 0)
+            periwound_visibility = self.periwound_edge_visibility_count.get(face_idx, 0)
+            total_views = len(self.cameras)  # Per-face denominator
 
-        # Select tissue seed faces for plane fit
-        tissue_candidates = [
-            f for f in face_indices
-            if (ratio_cache[f][0] + ratio_cache[f][1]) <= tissue_ratio_thresh
-        ]
-        if tissue_candidates:
-            total_views = np.array([ratio_cache[f][2] for f in tissue_candidates])
-            threshold = np.percentile(total_views, tissue_visibility_percentile)
-            high_vis_tissue = [f for f in tissue_candidates if ratio_cache[f][2] >= threshold]
-        else:
-            high_vis_tissue = []
+            # Calculate ratios (coherent: r_wound + r_periwound <= 1.0)
+            r_wound = wound_visibility / total_views if total_views > 0 else 0.0
+            r_periwound = periwound_visibility / total_views if total_views > 0 else 0.0
 
-        if not high_vis_tissue:
-            high_vis_tissue = tissue_candidates
+            ratio_cache[face_idx] = (r_wound, r_periwound, total_views)
 
-        plane_points = centroids[high_vis_tissue] if high_vis_tissue else centroids[face_indices]
-        plane_normal, plane_d = self._fit_plane(plane_points)
+            face_indices.append(face_idx)
 
-        # Multi-scale height deviations
-        height_devs = self._compute_height_deviation_multiscale(
-            face_indices, centroids, plane_normal, plane_d, ring_sizes
+        # Derive periwound_candidate_periwound_thresh from the r_periwound distribution
+        # so that the top `periwound_candidate_top_percent`% of faces pass the threshold
+        r_periwound_values = np.array([ratio_cache[f][1] for f in face_indices], dtype=np.float64)
+        periwound_candidate_periwound_thresh = min(float( np.percentile(r_periwound_values, 100.0 - periwound_candidate_top_percent)),0.05) if len(r_periwound_values) > 0 else 0.0
+        print(
+            f"  periwound_candidate_periwound_thresh: "
+            f"{periwound_candidate_periwound_thresh:.4f}"
         )
 
-        # Normal deviation from tissue plane
-        normal_dev = self._compute_normal_deviation(self.face_normals, plane_normal)
+        # Plot histogram of r_periwound values
+        if len(r_periwound_values) > 0:
+            try:
+                import matplotlib.pyplot as plt
+
+                plt.figure(figsize=(8, 4))
+                plt.hist(r_periwound_values, bins=50, color="steelblue", alpha=0.8, edgecolor="black")
+                plt.axvline(
+                    periwound_candidate_periwound_thresh,
+                    color="crimson",
+                    linestyle="--",
+                    linewidth=2,
+                    label=f"threshold={periwound_candidate_periwound_thresh:.3f}",
+                )
+                plt.title("Histogram of r_periwound values")
+                plt.xlabel("r_periwound")
+                plt.ylabel("Face count")
+                plt.grid(alpha=0.3)
+                plt.legend()
+                plt.tight_layout()
+                plt.show()
+            except ImportError:
+                print("matplotlib not available; skipping r_periwound histogram plot.")
+
+        # Select periwound seed faces for plane fit
+        periwound_candidates = [
+            f for f in face_indices
+            if ratio_cache[f][1] > periwound_candidate_periwound_thresh and ratio_cache[f][0] < periwound_candidate_wound_thresh
+        ]
+        print(f"  periwound_candidates: {len(periwound_candidates)} / {len(face_indices)} faces")
+
+        plane_points = centroids[periwound_candidates] if periwound_candidates else centroids[face_indices]
+        plane_face_indices = periwound_candidates if periwound_candidates else face_indices
+        plane_face_normals = self.face_normals[plane_face_indices] if len(plane_face_indices) > 0 else None
+        plane_normal, plane_d = self._fit_plane(plane_points, face_normals=plane_face_normals)
+
+        # Build feature list based on toggles
+        if use_ratio_features:
+            feature_names = ["r_wound", "r_periwound"]
+        else:
+            feature_names = []
+        features_list = []
+        
+        # Centroid position features
+        if use_centroid_features:
+            feature_names.extend(["centroid_x", "centroid_y", "centroid_z"])
+        
+        # Height deviation features
+        if use_height_deviation:
+            height_devs = self._compute_height_deviation_multiscale(
+                face_indices, centroids, plane_normal, plane_d, ring_sizes
+            )
+            for ring in ring_sizes:
+                feature_names.append(f"height_dev_r{ring}")
+        
+        # Normal deviation feature
+        if use_normal_deviation:
+            normal_dev = self._compute_normal_deviation(self.face_normals, plane_normal)
+            feature_names.append("normal_dev")
+
+        # Scale-adaptive curvature feature
+        if use_curvature:
+            curvature_vals = self._compute_mesh_curvature(
+                face_indices, centroids, plane_normal, plane_d, ratio_cache
+            )
+            feature_names.append("curvature")
+
+        # Color features based on selected color space
+        if color_space != "none" and self.vertex_colors is not None:
+            if color_space == "rgb":
+                feature_names.extend(["R", "G", "B"])
+            elif color_space == "lab_b":
+                feature_names.append("lab_b")
+            elif color_space == "ydrdb":
+                feature_names.extend(["Dr", "Db"])
+            else:
+                print(f"Warning: Unknown color_space '{color_space}'. Using 'none'.")
+                color_space = "none"
 
         # Build feature vectors
-        feature_names = ["r_wound", "r_edge"]
-        for ring in ring_sizes:
-            feature_names.append(f"height_dev_r{ring}")
-        feature_names.append("normal_dev")
-
         features = []
-        for face_idx in face_indices:
-            r_wound, r_edge, _ = ratio_cache[face_idx]
-            feat = [r_wound, r_edge]
-            feat.extend(height_devs[face_idx])
-            feat.append(float(normal_dev[face_idx]))
+        for i, face_idx in enumerate(face_indices):
+            r_wound, r_periwound, total_views = ratio_cache[face_idx]
+            
+            if use_ratio_features:
+                feat = [r_wound, r_periwound]
+            else:
+                feat = []
+
+            
+            if use_centroid_features:
+                # Add centroid position features
+                centroid = centroids[face_idx]
+                feat.extend([float(centroid[0]), float(centroid[1]), float(centroid[2])])
+
+            # Add height deviation features
+            if use_height_deviation:
+                feat.extend(height_devs[face_idx])
+            
+            # Add normal deviation feature
+            if use_normal_deviation:
+                feat.append(float(normal_dev[face_idx]))
+
+            # Add curvature feature
+            if use_curvature:
+                feat.append(float(curvature_vals[i]))
+
+            # Add color features based on selected color space
+            if color_space != "none" and self.vertex_colors is not None:
+                face = self.faces[face_idx]
+                face_colors = self.vertex_colors[face]
+                mean_color_rgb = np.mean(face_colors, axis=0)
+                
+                if color_space == "rgb":
+                    feat.extend(mean_color_rgb.tolist())
+                elif color_space == "lab_b":
+                    lab_color = self._rgb_to_lab(mean_color_rgb)
+                    feat.append(lab_color[2])  # b channel only
+                elif color_space == "ydrdb":
+                    ydrdb_color = self._rgb_to_ydrdb(mean_color_rgb)
+                    feat.extend([ydrdb_color[2], ydrdb_color[1]])  # Dr, Db (not Y)
+            
             features.append(feat)
 
         self.semantic_feature_names = feature_names
         self.semantic_face_indices = face_indices
-        self.semantic_features = np.array(features, dtype=np.float64)
+        raw_features = np.array(features, dtype=np.float64)
+        self.semantic_features_raw = raw_features.copy()
+
+        # Standardize features so GMM treats all dimensions equally
+        if raw_features.size > 0:
+            self._feature_mean = np.mean(raw_features, axis=0)
+            self._feature_std = np.std(raw_features, axis=0) + 1e-9
+            self.semantic_features = (raw_features - self._feature_mean) / self._feature_std
+        else:
+            self._feature_mean = None
+            self._feature_std = None
+            self.semantic_features = raw_features
         
         # Store intermediate data for visualization
         self.semantic_fitted_plane = (plane_normal, plane_d)
         
-        # Create feature colormaps for each computed feature
+        # Create feature colormaps for each computed feature using raw values
         self.semantic_feature_colormaps = {}
-        features_array = self.semantic_features
-        for feat_idx, feat_name in enumerate(feature_names):
-            feat_values = features_array[:, feat_idx]
-            feat_min, feat_max = np.percentile(feat_values, [5, 95])
-            feat_range = feat_max - feat_min if feat_max > feat_min else 1.0
-            colormap = {}
-            for i, face_idx in enumerate(face_indices):
-                val_norm = (feat_values[i] - feat_min) / feat_range if feat_range > 0 else 0.5
-                val_norm = np.clip(val_norm, 0.0, 1.0)
-                # Viridis-like colormap: purple -> blue -> green -> yellow
-                if val_norm < 0.33:
-                    r, g, b = int(148 * (1 - val_norm/0.33)), 0, int(211 * (1 - val_norm/0.33))  # purple to blue
-                elif val_norm < 0.67:
-                    r, g, b = 0, int(255 * (val_norm - 0.33)/0.34), 211                           # blue to cyan
-                else:
-                    r, g, b = int(255 * (val_norm - 0.67)/0.33), 255, 0                           # cyan to yellow
-                colormap[face_idx] = np.array([r, g, b], dtype=np.uint8)
-            self.semantic_feature_colormaps[feat_name] = colormap
+        if face_indices and raw_features.size > 0:
+            for feat_idx, feat_name in enumerate(feature_names):
+                colormap, _, _ = self._build_feature_colormap_assets(
+                    face_indices, raw_features[:, feat_idx], feat_name, generate_artifacts=False
+                )
+                if colormap:
+                    self.semantic_feature_colormaps[feat_name] = colormap
         
         return self.semantic_features, self.semantic_face_indices, ratio_cache
 
@@ -884,33 +1146,50 @@ class WoundModel3DMesh:
                              features: np.ndarray,
                              face_indices: List[int],
                              ratio_cache: Dict[int, Tuple[float, float, int]],
-                             tissue_ratio_thresh: float,
-                             wound_ratio_thresh: float,
-                             edge_ratio_thresh: float,
-                             min_total_views: int,
+                             r_wound_thresh: float = 0.3,
+                             r_periwound_thresh: float = 0.3,
                              regularization: float = 1e-3) -> Dict[str, Dict[str, np.ndarray]]:
-        """Fit single Gaussian model per class (sklearn when available)."""
-        class_samples = {"tissue": [], "wound_edge": [], "wound": []}
-        class_sample_indices = {"tissue": [], "wound_edge": [], "wound": []}  # Store face indices
+        """Fit Gaussian models for 3 classes: tissue, periwound, and wound.
+        
+        Uses visibility ratios to assign class labels:
+        - Wound class: faces with r_wound > r_wound_thresh
+        - Periwound class: faces with r_periwound > r_periwound_thresh (area around wound)
+        - Tissue class: faces with low visibility ratios (r_wound < r_wound_thresh AND r_periwound < r_periwound_thresh)
+        
+        The periwound class represents the boundary tissue around the wound,
+        detected from the difference between extruded and regular wound masks.
+        """
+        class_samples = {"tissue": [], "periwound": [], "wound": []}
+        class_sample_indices = {"tissue": [], "periwound": [], "wound": []}
         idx_map = {face_idx: i for i, face_idx in enumerate(face_indices)}
 
+        # Classify faces based on visibility ratios
         for face_idx in face_indices:
-            r_wound, r_edge, total_views = ratio_cache[face_idx]
-            if total_views < min_total_views:
-                continue
-
-            if (r_wound + r_edge) <= tissue_ratio_thresh:
-                class_samples["tissue"].append(features[idx_map[face_idx]])
-                class_sample_indices["tissue"].append(face_idx)
-            elif r_wound >= wound_ratio_thresh and r_wound >= r_edge:
-                class_samples["wound"].append(features[idx_map[face_idx]])
+            feat_idx = idx_map[face_idx]
+            r_wound, r_periwound, _ = ratio_cache[face_idx]
+            
+            is_wound = r_wound > r_wound_thresh
+            is_periwound = r_periwound > r_periwound_thresh
+            is_tissue = r_wound == 0.0 and r_periwound == 0.0
+            
+            # Priority: wound > periwound > tissue
+            if is_wound:
+                class_samples["wound"].append(features[feat_idx])
                 class_sample_indices["wound"].append(face_idx)
-            elif r_edge >= edge_ratio_thresh and r_edge > r_wound:
-                class_samples["wound_edge"].append(features[idx_map[face_idx]])
-                class_sample_indices["wound_edge"].append(face_idx)
+            if is_periwound:
+                class_samples["periwound"].append(features[feat_idx])
+                class_sample_indices["periwound"].append(face_idx)
+            if is_tissue:
+                class_samples["tissue"].append(features[feat_idx])
+                class_sample_indices["tissue"].append(face_idx)
+            # Faces not meeting any threshold are excluded from training
 
         # Store class samples for visualization
         self.semantic_class_samples = class_sample_indices
+        
+        print(f"  Class samples: tissue={len(class_sample_indices['tissue'])}, "
+              f"periwound={len(class_sample_indices['periwound'])}, "
+              f"wound={len(class_sample_indices['wound'])}")
         
         models = {}
 
@@ -919,13 +1198,17 @@ class WoundModel3DMesh:
             from sklearn.mixture import GaussianMixture
             for cls_name, samples in class_samples.items():
                 if not samples:
+                    print(f"Warning: No samples for class {cls_name}")
                     continue
                 X = np.vstack(samples)
+                # Use 2 components to capture multi-modal distributions;
+                # fall back to 1 if insufficient samples.
+                n_comp = min(2, max(1, len(X) // (X.shape[1] + 1)))
                 gmm = GaussianMixture(
-                    n_components=1,
+                    n_components=n_comp,
                     covariance_type="full",
                     reg_covar=regularization,
-                    max_iter=200,
+                    max_iter=300,
                     init_params="kmeans"
                 )
                 gmm.fit(X)
@@ -938,30 +1221,6 @@ class WoundModel3DMesh:
         except Exception as e:
             print(f"sklearn GaussianMixture unavailable, falling back to manual MVN: {e}")
 
-        # Manual MVN fallback
-        for cls_name, samples in class_samples.items():
-            if not samples:
-                continue
-            X = np.vstack(samples)
-            mean = np.mean(X, axis=0)
-            if len(X) < X.shape[1] + 1:
-                cov = np.diag(np.var(X, axis=0) + regularization)
-            else:
-                cov = np.cov(X, rowvar=False)
-                cov += np.eye(cov.shape[0]) * regularization
-            inv_cov = np.linalg.pinv(cov)
-            sign, log_det = np.linalg.slogdet(cov)
-            if sign <= 0:
-                log_det = np.log(np.maximum(np.linalg.det(cov), 1e-12))
-            models[cls_name] = {
-                "mean": mean,
-                "cov": cov,
-                "inv_cov": inv_cov,
-                "log_det": log_det,
-                "n_samples": len(X)
-            }
-
-        self.semantic_gmm_models = models
         return models
 
     def _gaussian_logpdf(self, x: np.ndarray, mean: np.ndarray, inv_cov: np.ndarray, log_det: float) -> float:
@@ -974,17 +1233,28 @@ class WoundModel3DMesh:
     def _compute_posteriors_from_models(self,
                                         features: np.ndarray,
                                         models: Dict[str, Dict[str, np.ndarray]]) -> np.ndarray:
-        """Compute posterior probabilities for each face."""
+        """Compute posterior probabilities for each face.
+        
+        Includes class priors proportional to training sample counts.
+        """
         n = features.shape[0]
         class_names = self.semantic_class_names
         log_likelihoods = np.full((n, len(class_names)), -1e12, dtype=np.float64)
+
+        # Compute class priors from training sample counts
+        total_training = sum(m.get("n_samples", 0) for m in models.values())
+        log_priors = np.zeros(len(class_names), dtype=np.float64)
+        for k, cls_name in enumerate(class_names):
+            if cls_name in models and total_training > 0:
+                n_cls = models[cls_name].get("n_samples", 0)
+                log_priors[k] = np.log(max(n_cls / total_training, 1e-12))
 
         for k, cls_name in enumerate(class_names):
             if cls_name not in models:
                 continue
             model = models[cls_name]
             if "gmm" in model:
-                log_likelihoods[:, k] = model["gmm"].score_samples(features)
+                log_likelihoods[:, k] = model["gmm"].score_samples(features) + log_priors[k]
                 continue
 
             mean = model["mean"]
@@ -994,7 +1264,10 @@ class WoundModel3DMesh:
             diff = features - mean
             quad = np.einsum("ij,jk,ik->i", diff, inv_cov, diff)
             d = features.shape[1]
-            log_likelihoods[:, k] = -0.5 * (quad + log_det + d * np.log(2.0 * np.pi))
+            log_likelihoods[:, k] = -0.5 * (quad + log_det + d * np.log(2.0 * np.pi)) + log_priors[k]
+
+        # Store raw log-likelihoods for visualization
+        self.semantic_log_likelihoods = log_likelihoods.copy()
 
         # Softmax to posterior
         max_ll = np.max(log_likelihoods, axis=1, keepdims=True)
@@ -1006,23 +1279,97 @@ class WoundModel3DMesh:
                                posteriors: np.ndarray,
                                face_indices: List[int],
                                lambda_smooth: float = 1.0,
-                               max_iters: int = 5) -> np.ndarray:
-        """Apply MRF constraints to enforce wound-edge-tissue topology.
-
-        Enforces that wound does not directly touch tissue by relabeling
-        the lower-confidence face to wound_edge when conflict occurs.
+                               max_iters: int = 5,
+                               method: str = "graph_cut") -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """Apply MRF smoothness constraints for N-class semantic classification.
+        
+        Args:
+            posteriors: (N, K) array of class posteriors (K = number of classes)
+            face_indices: List of face indices corresponding to each posterior row
+            lambda_smooth: Smoothness weight for pairwise cost
+            max_iters: Maximum iterations for iterative methods
+            method: "graph_cut" for alpha-expansion, "mean_field" for mean field approximation
+        
+        Returns:
+            labels: (N,) array of hard labels (0=tissue, 1=periwound, 2=wound for 3-class)
+            mrf_posteriors: (N, K) array of refined posteriors (only for mean_field, None for graph_cut)
         """
         labels = np.argmax(posteriors, axis=1).astype(np.int32)
         face_to_idx = {face_idx: i for i, face_idx in enumerate(face_indices)}
-
+        n_classes = posteriors.shape[1]  # Should be 2
+        n_faces = len(face_indices)
+        
+        # ===================== MEAN FIELD APPROXIMATION =====================
+        if method == "mean_field":
+            print(f"Applying mean field approximation (lambda={lambda_smooth}, max_iters={max_iters})...")
+            
+            # Initialize beliefs with unary posteriors
+            q = posteriors.copy()  # (N, 2) belief distributions
+            
+            # Build neighbor list for efficient iteration
+            neighbor_lists = []
+            for f in face_indices:
+                neighbors = []
+                for adj in self.face_adjacency.get(f, []):
+                    if adj in face_to_idx:
+                        neighbors.append(face_to_idx[adj])
+                neighbor_lists.append(neighbors)
+            
+            # Mean field iterations
+            for iteration in range(max_iters):
+                q_old = q.copy()
+                
+                # Update each face's belief
+                for i, face_idx in enumerate(face_indices):
+                    # Unary potential: log P(class | features)
+                    unary_log = np.log(posteriors[i] + 1e-12)
+                    
+                    # Pairwise message from neighbors
+                    # For each class c, sum over neighbors: lambda * E_q[1(neighbor != c)]
+                    pairwise_msg = np.zeros(n_classes)
+                    for j in neighbor_lists[i]:
+                        # Expected disagreement cost for each class assignment
+                        # If we assign class c to face i, cost = lambda * sum_k P(neighbor=k) * 1(k != c)
+                        for c in range(n_classes):
+                            pairwise_msg[c] -= lambda_smooth * (1.0 - q_old[j, c])
+                    
+                    # Combine unary and pairwise
+                    log_belief = unary_log + pairwise_msg
+                    
+                    # Softmax to get updated belief
+                    log_belief -= np.max(log_belief)  # Numerical stability
+                    q[i] = np.exp(log_belief)
+                    q[i] /= np.sum(q[i]) + 1e-12
+                
+                # Check convergence
+                max_change = np.max(np.abs(q - q_old))
+                if max_change < 1e-4:
+                    print(f"  Mean field converged at iteration {iteration + 1} (max_change={max_change:.6f})")
+                    break
+            else:
+                print(f"  Mean field reached max_iters={max_iters} (max_change={max_change:.6f})")
+            
+            # Extract hard labels from beliefs
+            labels = np.argmax(q, axis=1).astype(np.int32)
+            
+            # Store mean field posteriors for visualization
+            self.semantic_mrf_posteriors = {}
+            for i, face_idx in enumerate(face_indices):
+                self.semantic_mrf_posteriors[face_idx] = q[i].copy()
+            
+            return labels, q
+        
+        # ===================== GRAPH CUT (ALPHA-EXPANSION) =====================
         # Attempt graph-cut if available
         try:
             import maxflow
             if hasattr(maxflow, "fastmin") and hasattr(maxflow.fastmin, "aexpansion"):
                 unary = -np.log(posteriors + 1e-12)
-                pairwise = np.zeros((3, 3), dtype=np.float64)
-                pairwise[0, 2] = 1e6
-                pairwise[2, 0] = 1e6
+                
+                # Symmetric pairwise penalty for label disagreement
+                # lambda_smooth is baked into the pairwise matrix; do NOT pass it again
+                pairwise = lambda_smooth * np.ones((n_classes, n_classes), dtype=np.float64)
+                np.fill_diagonal(pairwise, 0.0)  # No penalty for same labels
 
                 edges = []
                 for f in face_indices:
@@ -1036,34 +1383,45 @@ class WoundModel3DMesh:
 
                 edges = np.array(edges, dtype=np.int32)
                 if len(edges) > 0:
-                    labels = maxflow.fastmin.aexpansion(unary, pairwise, edges, lambda_smooth)
-                return labels
+                    labels = maxflow.fastmin.aexpansion(unary, pairwise, edges)
+                
+                self.semantic_mrf_posteriors = {}  # No refined posteriors for graph cut
+                return labels, None
         except Exception as e:
-            print(f"MRF graph-cut unavailable, using greedy constraint enforcement: {e}")
+            print(f"MRF graph-cut unavailable, using greedy smoothness: {e}")
 
-        # Greedy constraint enforcement fallback
+        # Greedy smoothness enforcement fallback (ICM-style)
+        # Combines unary cost (negative log posterior) with pairwise smoothness
         for _ in range(max_iters):
             changed = False
             for f in face_indices:
                 i = face_to_idx[f]
-                for adj in self.face_adjacency.get(f, []):
-                    if adj not in face_to_idx:
-                        continue
-                    j = face_to_idx[adj]
-                    li, lj = labels[i], labels[j]
-                    if (li == 2 and lj == 0) or (li == 0 and lj == 2):
-                        # Relabel lower-confidence node to wound_edge (label 1)
-                        conf_i = posteriors[i, li]
-                        conf_j = posteriors[j, lj]
-                        if conf_i <= conf_j:
-                            labels[i] = 1
-                        else:
-                            labels[j] = 1
-                        changed = True
+                # Compute total energy for each possible label
+                best_label = labels[i]
+                best_energy = float('inf')
+                for candidate in range(n_classes):
+                    # Unary cost: -log P(candidate | features)
+                    unary_cost = -np.log(posteriors[i, candidate] + 1e-12)
+                    # Pairwise cost: lambda_smooth * number of disagreeing neighbors
+                    pairwise_cost = 0.0
+                    for adj in self.face_adjacency.get(f, []):
+                        if adj not in face_to_idx:
+                            continue
+                        j = face_to_idx[adj]
+                        if labels[j] != candidate:
+                            pairwise_cost += lambda_smooth
+                    total_cost = unary_cost + pairwise_cost
+                    if total_cost < best_energy:
+                        best_energy = total_cost
+                        best_label = candidate
+                if best_label != labels[i]:
+                    labels[i] = best_label
+                    changed = True
             if not changed:
                 break
 
-        return labels
+        self.semantic_mrf_posteriors = {}  # No refined posteriors for ICM
+        return labels, None
 
     def _compute_confidence_from_posteriors(self,
                                             posteriors: np.ndarray,
@@ -1079,25 +1437,47 @@ class WoundModel3DMesh:
     def run_semantic_classification(self,
                                     tissue_ratio_thresh: float = 0.05,
                                     wound_ratio_thresh: float = 0.6,
-                                    edge_ratio_thresh: float = 0.6,
-                                    min_total_views: int = 1,
-                                    tissue_visibility_percentile: float = 70.0,
                                     ring_sizes: List[int] = None,
                                     confidence_method: str = "entropy",
-                                    lambda_smooth: float = 1.0) -> None:
-        """Run feature-based semantic classification with MRF constraint."""
+                                    lambda_smooth: float = 1.0,
+                                    mrf_method: str = "graph_cut",
+                                    mrf_max_iters: int = 10,
+                                    use_centroid_features: bool = True,
+                                    use_height_deviation: bool = True,
+                                    use_normal_deviation: bool = True,
+                                    use_curvature: bool = True,
+                                    color_space: str = "lab_b") -> None:
+        """Run feature-based semantic classification for 3-class (tissue, periwound, wound) with feature toggles.
+        
+        Args:
+            tissue_ratio_thresh: Threshold for tissue candidate identification
+            wound_ratio_thresh: Threshold for wound class assignment in GMM training
+            ring_sizes: Ring sizes for multi-scale features
+            confidence_method: "entropy" or "max" for confidence computation
+            lambda_smooth: Regularization weight for MRF smoothness
+            mrf_method: "graph_cut" for alpha-expansion, "mean_field" for mean field approximation
+            mrf_max_iters: Maximum iterations for MRF methods (mean field or ICM fallback)
+            use_height_deviation: Include height deviation features
+            use_normal_deviation: Include normal deviation features
+            use_curvature: Include scale-adaptive discrete mean curvature feature
+            color_space: Color space to use: "none", "rgb", "lab_b" (LAB b-channel only), or "ydrdb" (Dr and Db only)
+        """
         if not self.faces_processed:
             raise ValueError("Must process wound segmentation first")
         if not self.topology_computed:
             self._compute_mesh_topology()
+        
+        # Detect initial tissue faces from mask difference
+        self.process_tissue_face_detection(max_mask_rays=200000)
 
         features, face_indices, ratio_cache = self._build_feature_vectors(
-            tissue_ratio_thresh=tissue_ratio_thresh,
-            wound_ratio_thresh=wound_ratio_thresh,
-            edge_ratio_thresh=edge_ratio_thresh,
-            min_total_views=min_total_views,
-            tissue_visibility_percentile=tissue_visibility_percentile,
-            ring_sizes=ring_sizes or [1, 3]
+            ring_sizes=ring_sizes or [1, 3],
+            use_ratio_features=False,
+            use_centroid_features=use_centroid_features,
+            use_height_deviation= use_height_deviation,
+            use_normal_deviation=use_normal_deviation,
+            use_curvature=use_curvature,
+            color_space=color_space
         )
 
         if features is None or len(features) == 0:
@@ -1108,10 +1488,8 @@ class WoundModel3DMesh:
             features=features,
             face_indices=face_indices,
             ratio_cache=ratio_cache,
-            tissue_ratio_thresh=tissue_ratio_thresh,
-            wound_ratio_thresh=wound_ratio_thresh,
-            edge_ratio_thresh=edge_ratio_thresh,
-            min_total_views=min_total_views
+            r_wound_thresh=0.3,
+            r_periwound_thresh=0.3,
         )
 
         if not models:
@@ -1120,43 +1498,127 @@ class WoundModel3DMesh:
 
         posteriors = self._compute_posteriors_from_models(features, models)
         
+        # Store per-face raw log-likelihoods for visualization (3-class: tissue, periwound, wound)
+        self.semantic_tissue_loglik = {}
+        self.semantic_periwound_loglik = {}
+        self.semantic_wound_loglik = {}
+        if self.semantic_log_likelihoods is not None:
+            for i, face_idx in enumerate(face_indices):
+                self.semantic_tissue_loglik[face_idx] = float(self.semantic_log_likelihoods[i, 0])
+                if self.semantic_log_likelihoods.shape[1] > 2:
+                    self.semantic_periwound_loglik[face_idx] = float(self.semantic_log_likelihoods[i, 1])
+                    self.semantic_wound_loglik[face_idx] = float(self.semantic_log_likelihoods[i, 2])
+                else:
+                    self.semantic_wound_loglik[face_idx] = float(self.semantic_log_likelihoods[i, 1])
+        
         # Store posteriors before MRF for visualization
         self.semantic_posteriors_before_mrf = {}
         for i, face_idx in enumerate(face_indices):
             self.semantic_posteriors_before_mrf[face_idx] = posteriors[i].copy()
         
-        labels = self._apply_mrf_constraints(posteriors, face_indices, lambda_smooth=lambda_smooth)
-        confidence = self._compute_confidence_from_posteriors(posteriors, method=confidence_method)
+        # Apply MRF constraints
+        self.semantic_mrf_method = mrf_method
+        labels, mrf_posteriors = self._apply_mrf_constraints(
+            posteriors, face_indices, 
+            lambda_smooth=lambda_smooth, 
+            max_iters=mrf_max_iters,
+            method=mrf_method
+        )
+        
+        # Use MRF posteriors for confidence if available (mean field), otherwise use GMM posteriors
+        if mrf_posteriors is not None:
+            confidences = self._compute_confidence_from_posteriors(mrf_posteriors, method=confidence_method)
+            final_posteriors = mrf_posteriors
+        else:
+            confidences = self._compute_confidence_from_posteriors(posteriors, method=confidence_method)
+            final_posteriors = posteriors
 
-        # Store per-face results
+        # Store per-face results (3-class: tissue=0, periwound=1, wound=2)
         self.semantic_posteriors = {}
         self.semantic_labels = {}
         self.semantic_confidence = {}
-        self.semantic_wound_prob = {}
-        self.semantic_edge_prob = {}
         self.semantic_tissue_prob = {}
+        self.semantic_periwound_prob = {}
+        self.semantic_wound_prob = {}
 
+        n_classes = final_posteriors.shape[1] if len(final_posteriors.shape) > 1 else 2
         for i, face_idx in enumerate(face_indices):
-            probs = posteriors[i]
+            probs = final_posteriors[i]
             label_name = self.semantic_class_names[int(labels[i])]
             self.semantic_posteriors[face_idx] = probs
             self.semantic_labels[face_idx] = label_name
-            self.semantic_confidence[face_idx] = float(confidence[i])
+            self.semantic_confidence[face_idx] = float(confidences[i])
             self.semantic_tissue_prob[face_idx] = float(probs[0])
-            self.semantic_edge_prob[face_idx] = float(probs[1])
-            self.semantic_wound_prob[face_idx] = float(probs[2])
+            if n_classes > 2:
+                self.semantic_periwound_prob[face_idx] = float(probs[1])
+                self.semantic_wound_prob[face_idx] = float(probs[2])
+            else:
+                self.semantic_periwound_prob[face_idx] = 0.0
+                self.semantic_wound_prob[face_idx] = float(probs[1])
+        
+        # Compute wound_edge as boundary between wound and tissue
+        self._compute_wound_edge_boundary()
 
         print("Semantic classification complete")
         print(f"  Faces classified: {len(self.semantic_labels)}")
         print(f"  Confidence (mean): {np.mean(list(self.semantic_confidence.values())):.3f}")
     
+    def _compute_wound_edge_boundary(self):
+        """Compute wound_edge as the boundary region between classified wound and periwound/tissue faces."""
+        self.wound_edge_face_indices = set()
+        self.wound_edge_vertices = set()
+        self.wound_edge_edges = []
+        
+        # Get classified faces
+        wound_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "wound"}
+        periwound_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "periwound"}
+        tissue_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "tissue"}
+        non_wound_faces = periwound_faces | tissue_faces
+        
+        # Find faces adjacent to both wound and non-wound (boundary faces)
+        for face_idx in wound_faces:
+            for adj_face in self.face_adjacency.get(face_idx, []):
+                if adj_face in non_wound_faces:
+                    # This wound face is adjacent to periwound/tissue - it's on the boundary
+                    self.wound_edge_face_indices.add(face_idx)
+                    break
+        
+        # Also add non-wound faces on the boundary
+        for face_idx in non_wound_faces:
+            for adj_face in self.face_adjacency.get(face_idx, []):
+                if adj_face in wound_faces:
+                    # This periwound/tissue face is adjacent to wound - it's on the boundary
+                    self.wound_edge_face_indices.add(face_idx)
+                    break
+        
+        # Extract wound_edge vertices from boundary faces
+        for face_idx in self.wound_edge_face_indices:
+            self.wound_edge_vertices.update(self.faces[face_idx])
+        
+        # Extract wound_edge edges (edges between wound and non-wound faces)
+        for edge, face_list in self.edge_adjacency.items():
+            if len(face_list) == 2:
+                f0, f1 = face_list
+                f0_label = self.semantic_labels.get(f0)
+                f1_label = self.semantic_labels.get(f1)
+                # If one is wound and other is not wound
+                if (f0_label == "wound" and f1_label in ("periwound", "tissue")) or \
+                   (f0_label in ("periwound", "tissue") and f1_label == "wound"):
+                    v0, v1 = edge
+                    self.wound_edge_edges.append((v0, v1))
+        
+        print(f"Wound edge boundary faces: {len(self.wound_edge_face_indices)}")
+        print(f"Wound edge vertices: {len(self.wound_edge_vertices)}")
+        print(f"Wound edge edges: {len(self.wound_edge_edges)}")
+
+    
     def plot_visibility_histograms(self, output_dir: Path = None, show_plot: bool = True) -> None:
         """
-        Plot histograms of visibility counts for wound and tissue edge faces.
+        Plot histograms of visibility counts for wound and periwound faces.
         
         Creates separate histograms showing:
         - Wound face visibility distribution
-        - Tissue edge face visibility distribution
+        - periwound face visibility distribution
         - Overlapping faces highlighted
         
         Args:
@@ -1176,7 +1638,7 @@ class WoundModel3DMesh:
         
         # Collect visibility counts
         wound_counts = np.array(list(self.face_visibility_count.values()))
-        tissue_counts = np.array(list(self.tissue_edge_visibility_count.values()))
+        tissue_counts = np.array(list(self.periwound_edge_visibility_count.values()))
         
         # Create figure with two subplots
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -1202,14 +1664,14 @@ class WoundModel3DMesh:
             ax1.text(0.5, 0.5, 'No wound faces', ha='center', va='center')
             ax1.set_title('Wound Face Visibility', fontsize=14)
         
-        # Plot 2: Tissue edge visibility histogram
+        # Plot 2: periwound visibility histogram
         ax2 = axes[0, 1]
         if len(tissue_counts) > 0:
             ax2.hist(tissue_counts, bins=min(50, int(np.max(tissue_counts))),
                     color='blue', alpha=0.7, edgecolor='black')
             ax2.set_xlabel('Visibility Count (# of cameras)', fontsize=12)
             ax2.set_ylabel('Number of Faces', fontsize=12)
-            ax2.set_title(f'Tissue Edge Visibility (n={len(tissue_counts)})', fontsize=14)
+            ax2.set_title(f'periwound Visibility (n={len(tissue_counts)})', fontsize=14)
             ax2.grid(True, alpha=0.3)
             
             # Add statistics text
@@ -1219,8 +1681,8 @@ class WoundModel3DMesh:
                     bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5),
                     fontsize=10)
         else:
-            ax2.text(0.5, 0.5, 'No tissue edge faces', ha='center', va='center')
-            ax2.set_title('Tissue Edge Visibility', fontsize=14)
+            ax2.text(0.5, 0.5, 'No periwound faces', ha='center', va='center')
+            ax2.set_title('periwound Visibility', fontsize=14)
         
         # Plot 3: Overlapping faces comparison
         ax3 = axes[1, 0]
@@ -1230,7 +1692,7 @@ class WoundModel3DMesh:
             
             ax3.scatter(overlap_wound, overlap_tissue, alpha=0.6, s=30, color='purple')
             ax3.set_xlabel('Wound Visibility Count', fontsize=12)
-            ax3.set_ylabel('Tissue Edge Visibility Count', fontsize=12)
+            ax3.set_ylabel('periwound Visibility Count', fontsize=12)
             ax3.set_title(f'Overlapping Faces (n={len(self.overlapping_faces)})', fontsize=14)
             ax3.grid(True, alpha=0.3)
             
@@ -1249,7 +1711,7 @@ class WoundModel3DMesh:
         # Separate overlapping and non-overlapping
         non_overlap_wound = [self.face_visibility_count[f] for f in self.face_visibility_count.keys() 
                             if f not in self.overlapping_faces]
-        non_overlap_tissue = [self.tissue_edge_visibility_count[f] for f in self.tissue_edge_visibility_count.keys() 
+        non_overlap_tissue = [self.periwound_edge_visibility_count[f] for f in self.periwound_edge_visibility_count.keys() 
                              if f not in self.overlapping_faces]
         
         max_count = max(
@@ -1263,7 +1725,7 @@ class WoundModel3DMesh:
                     label=f'Wound only (n={len(non_overlap_wound)})', edgecolor='darkred')
         if len(non_overlap_tissue) > 0:
             ax4.hist(non_overlap_tissue, bins=bins, color='blue', alpha=0.5,
-                    label=f'Tissue edge only (n={len(non_overlap_tissue)})', edgecolor='darkblue')
+                    label=f'periwound only (n={len(non_overlap_tissue)})', edgecolor='darkblue')
         
         ax4.set_xlabel('Visibility Count (# of cameras)', fontsize=12)
         ax4.set_ylabel('Number of Faces', fontsize=12)
@@ -1301,7 +1763,7 @@ class WoundModel3DMesh:
         try:
             import open3d as o3d
         except ImportError:
-            print("Open3D not available for tissue edge raycasting")
+            print("Open3D not available for periwound raycasting")
             return []
         
         if self.vertices is None or self.faces is None:
@@ -1359,21 +1821,21 @@ class WoundModel3DMesh:
         
         return np.unique(prim_ids).tolist()
     
-    def _compute_tissue_edge_face_stats(self, face_idx: int):
-        """Compute per-face color statistics for tissue edge faces across all cameras.
+    def _compute_periwound_edge_face_stats(self, face_idx: int):
+        """Compute per-face color statistics for periwound faces across all cameras.
         
         Args:
             face_idx: Face index in self.faces
         """
-        if face_idx not in self.tissue_edge_faces:
+        if face_idx not in self.periwound_edge_faces:
             return
         
         # Get vertex colors for this face
         face = self.faces[face_idx]
         if self.vertex_colors is None:
             # Default colors if not available
-            self.tissue_edge_mean_color[face_idx] = np.array([0.5, 0.5, 0.5])
-            self.tissue_edge_color_std[face_idx] = np.array([0.0, 0.0, 0.0])
+            self.periwound_edge_mean_color[face_idx] = np.array([0.5, 0.5, 0.5])
+            self.periwound_edge_color_std[face_idx] = np.array([0.0, 0.0, 0.0])
             return
         
         # Collect vertex colors
@@ -1381,8 +1843,8 @@ class WoundModel3DMesh:
         mean_color = np.mean(vertex_colors, axis=0)
         std_color = np.std(vertex_colors, axis=0)
         
-        self.tissue_edge_mean_color[face_idx] = mean_color
-        self.tissue_edge_color_std[face_idx] = std_color
+        self.periwound_edge_mean_color[face_idx] = mean_color
+        self.periwound_edge_color_std[face_idx] = std_color
     
     def filter_by_visibility(self, min_visibility_count: int = 2) -> Set[int]:
         """
@@ -1407,27 +1869,27 @@ class WoundModel3DMesh:
         
         return high_visibility_faces
     
-    def filter_tissue_edge_by_visibility(self, min_visibility_count: int = 2) -> Set[int]:
-        """Filter tissue edge faces by minimum visibility count.
+    def filter_periwound_edge_by_visibility(self, min_visibility_count: int = 2) -> Set[int]:
+        """Filter periwound faces by minimum visibility count.
         
         Args:
-            min_visibility_count: Minimum number of cameras that must see a tissue edge face
+            min_visibility_count: Minimum number of cameras that must see a periwound face
             
         Returns:
-            Set of tissue edge face indices meeting visibility threshold
+            Set of periwound face indices meeting visibility threshold
         """
-        if not self.tissue_edge_faces:
+        if not self.periwound_edge_faces:
             return set()
         
-        high_visibility_tissue_edge = {
-            face_idx for face_idx, count in self.tissue_edge_visibility_count.items()
+        high_visibility_periwound_edge = {
+            face_idx for face_idx, count in self.periwound_edge_visibility_count.items()
             if count >= min_visibility_count
         }
         
-        print(f"Tissue edge visibility filtering: {len(high_visibility_tissue_edge)}/{len(self.tissue_edge_faces)} faces "
+        print(f"periwound visibility filtering: {len(high_visibility_periwound_edge)}/{len(self.periwound_edge_faces)} faces "
               f"seen by >= {min_visibility_count} cameras")
         
-        return high_visibility_tissue_edge
+        return high_visibility_periwound_edge
     
     def extract_connected_components(self, face_set: Set[int], min_faces: int = 10) -> List[Set[int]]:
         """
@@ -1576,7 +2038,9 @@ class WoundModel3DMesh:
         
         return filtered_faces
     
-    def morphological_closing(self, face_set: Set[int], iterations: int = 1, kernel_size: int = 1) -> Set[int]:
+    def morphological_closing(self, face_set: Set[int], iterations: int = 1, kernel_size: int = 1,
+                              use_probability_validation: bool = True,
+                              wound_prob_threshold: float = 0.3) -> Set[int]:
         """
         Perform morphological closing on wound faces (dilation followed by erosion).
         
@@ -1588,6 +2052,8 @@ class WoundModel3DMesh:
             face_set: Set of face indices to perform closing on
             iterations: Number of closing iterations
             kernel_size: Number of adjacency layers to expand in each dilation step (1=immediate neighbors, 2=2 layers, etc.)
+            use_probability_validation: If True, validate added faces using wound probability map
+            wound_prob_threshold: Minimum wound probability for a face to be added during closing
             
         Returns:
             Set of face indices after closing operation
@@ -1606,11 +2072,27 @@ class WoundModel3DMesh:
                     if not drop_isolated or wound_neighbors > 0:
                         eroded_faces.add(face_idx)
             return eroded_faces
+        
+        def _validate_face_probability(face_idx: int, threshold: float) -> bool:
+            """Check if a face passes the wound probability threshold."""
+            if not use_probability_validation:
+                return True
+            # Check semantic_wound_prob first
+            if self.semantic_wound_prob and face_idx in self.semantic_wound_prob:
+                return self.semantic_wound_prob[face_idx] >= threshold
+            # Check semantic_mrf_posteriors (mean field) if available
+            if hasattr(self, 'semantic_mrf_posteriors') and self.semantic_mrf_posteriors and face_idx in self.semantic_mrf_posteriors:
+                return self.semantic_mrf_posteriors[face_idx][1] >= threshold  # Index 1 is wound prob
+            # If no probability info available, allow the face
+            return True
 
         current_faces = face_set.copy()
 
         # Pre-erosion to drop tiny isolated structures before closing.
         current_faces = _erode_faces(current_faces, drop_isolated=True)
+        
+        validated_additions = 0
+        rejected_additions = 0
         
         for iteration in range(iterations):
             # Dilation: expand by kernel_size layers of adjacent faces
@@ -1624,7 +2106,12 @@ class WoundModel3DMesh:
                     adjacent = self.face_adjacency.get(face_idx, [])
                     for adj_face in adjacent:
                         if adj_face not in dilated:
-                            next_front.add(adj_face)
+                            # Validate face probability before adding
+                            if _validate_face_probability(adj_face, wound_prob_threshold):
+                                next_front.add(adj_face)
+                                validated_additions += 1
+                            else:
+                                rejected_additions += 1
                 dilated.update(next_front)
                 expansion_front = next_front
                 if not expansion_front:  # No more faces to expand
@@ -1636,14 +2123,18 @@ class WoundModel3DMesh:
             current_faces = eroded
         
         added_faces = current_faces - face_set
-        if added_faces:
-            print(f"Morphological closing added {len(added_faces)} faces")
+        if added_faces or rejected_additions > 0:
+            print(f"Morphological closing: added {len(added_faces)} faces")
+            if use_probability_validation:
+                print(f"  Probability validation: {validated_additions} validated, {rejected_additions} rejected (threshold={wound_prob_threshold:.2f})")
         
         return current_faces
     
     def expand_and_extract_components(self, face_set: Set[int],
                                      use_connectivity: bool = True,
-                                     min_component_faces: int = 10) -> Set[int]:
+                                     min_component_faces: int = 10,
+                                     use_probability_validation: bool = True,
+                                     wound_prob_threshold: float = 0.3) -> Set[int]:
         """
         Expand wound to include enclosed faces and extract connected components.
         
@@ -1655,12 +2146,27 @@ class WoundModel3DMesh:
             face_set: Set of face indices to process
             use_connectivity: Whether to extract connected components
             min_component_faces: Minimum faces for valid component
+            use_probability_validation: If True, validate enclosed faces using wound probability
+            wound_prob_threshold: Minimum wound probability for enclosed faces to be added
             
         Returns:
             Set of final face indices including enclosed faces
         """
         if not face_set:
             return face_set
+        
+        def _validate_face_probability(face_idx: int, threshold: float) -> bool:
+            """Check if a face passes the wound probability threshold."""
+            if not use_probability_validation:
+                return True
+            # Check semantic_wound_prob first
+            if self.semantic_wound_prob and face_idx in self.semantic_wound_prob:
+                return self.semantic_wound_prob[face_idx] >= threshold
+            # Check semantic_mrf_posteriors (mean field) if available
+            if hasattr(self, 'semantic_mrf_posteriors') and self.semantic_mrf_posteriors and face_idx in self.semantic_mrf_posteriors:
+                return self.semantic_mrf_posteriors[face_idx][1] >= threshold  # Index 1 is wound prob
+            # If no probability info available, allow the face (enclosed in wound region)
+            return True
         
         # Step 1: Expand wound to include enclosed non-wound faces
         if use_connectivity:
@@ -1690,7 +2196,23 @@ class WoundModel3DMesh:
                         queue.append(adj_face)
             
             # Enclosed faces are non-wound faces that couldn't be reached
-            enclosed_faces = non_wound_faces - outside
+            enclosed_faces_raw = non_wound_faces - outside
+            
+            # Validate enclosed faces using probability map
+            if use_probability_validation and enclosed_faces_raw:
+                validated_enclosed = set()
+                rejected_enclosed = set()
+                for face_idx in enclosed_faces_raw:
+                    if _validate_face_probability(face_idx, wound_prob_threshold):
+                        validated_enclosed.add(face_idx)
+                    else:
+                        rejected_enclosed.add(face_idx)
+                enclosed_faces = validated_enclosed
+                
+                if rejected_enclosed:
+                    print(f"Probability validation rejected {len(rejected_enclosed)} enclosed faces (threshold={wound_prob_threshold:.2f})")
+            else:
+                enclosed_faces = enclosed_faces_raw
             
             if enclosed_faces:
                 print(f"Found {len(enclosed_faces)} enclosed faces, adding to wound region")
@@ -1730,7 +2252,9 @@ class WoundModel3DMesh:
                       closing_iterations: int = 1,
                       closing_kernel_size: int = 1,
                       use_fill_holes: bool = False,
-                      hole_size: float = -1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      hole_size: float = -1.0,
+                      use_probability_validation: bool = True,
+                      wound_prob_threshold: float = 0.3) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Get final wound mesh after all filtering steps.
         
@@ -1738,12 +2262,13 @@ class WoundModel3DMesh:
             min_visibility: Minimum camera visibility count
             use_connectivity: Whether to extract connected components
             min_component_faces: Minimum faces for valid component
-            use_smoothness: Whether to apply smoothness filtering
             use_closing: Whether to apply morphological closing
             closing_iterations: Number of closing iterations
             closing_kernel_size: Number of adjacency layers to expand per iteration (1=neighbors, 2=2 layers, etc.)
             use_fill_holes: Whether to fill holes in the mesh using trimesh
             hole_size: Maximum hole size to fill (-1.0 for all holes)
+            use_probability_validation: If True, validate added faces using wound probability map
+            wound_prob_threshold: Minimum wound probability for faces added during closing/expansion
             
         Returns:
             Tuple of (wound_vertices, wound_faces, wound_colors)
@@ -1758,10 +2283,16 @@ class WoundModel3DMesh:
             print("Warning: No wound faces remain after filtering")
             return np.array([]), np.array([]), np.array([])
         
-        # Step 2: Apply morphological closing
+        # Step 2: Apply morphological closing with probability validation
         if use_closing:
             pre_close = set(filtered_faces)
-            filtered_faces = self.morphological_closing(filtered_faces, closing_iterations, closing_kernel_size)
+            filtered_faces = self.morphological_closing(
+                filtered_faces, 
+                closing_iterations, 
+                closing_kernel_size,
+                use_probability_validation=use_probability_validation,
+                wound_prob_threshold=wound_prob_threshold
+            )
             self.added_faces_closing = set(filtered_faces) - pre_close
         else:
             self.added_faces_closing = set()
@@ -1770,9 +2301,13 @@ class WoundModel3DMesh:
             print("Warning: No wound faces remain after closing")
             return np.array([]), np.array([]), np.array([])
         
-        # Step 3: Expand and extract components
+        # Step 3: Expand and extract components with probability validation
         filtered_faces = self.expand_and_extract_components(
-            filtered_faces, use_connectivity, min_component_faces
+            filtered_faces, 
+            use_connectivity, 
+            min_component_faces,
+            use_probability_validation=use_probability_validation,
+            wound_prob_threshold=wound_prob_threshold
         )
         
         if not filtered_faces:
@@ -1974,13 +2509,13 @@ class WoundModel3DMesh:
         except ImportError:
             print("Open3D not available for mesh export")
     
-    def visualize_with_rerun(self, session_name: str = "WoundModel3DMesh", min_tissue_edge_visibility: int = 2):
+    def visualize_with_rerun(self, session_name: str = "WoundModel3DMesh", min_periwound_edge_visibility: int = 2):
         """
         Visualize mesh-based wound segmentation using Rerun.
         
         Args:
             session_name: Name for the Rerun session
-            min_tissue_edge_visibility: Minimum visibility count for tissue edge faces to display
+            min_periwound_edge_visibility: Minimum visibility count for periwound faces to display
         """
         if not self.model_loaded:
             raise ValueError("Mesh must be loaded first")
@@ -2000,9 +2535,9 @@ class WoundModel3DMesh:
         # Create blueprint with tabs for each processing stage
         blueprint = rrb.Blueprint(
             rrb.Tabs(
-                rrb.Spatial3DView(origin="/world", name="Full Mesh & Tissue Edge"),
+                rrb.Spatial3DView(origin="/world", name="Full Mesh & periwound"),
                 rrb.Spatial3DView(origin="/wound", name="Wound Region"),
-                rrb.Spatial3DView(origin="/tissue_edge", name="Tissue Edge Details"),
+                rrb.Spatial3DView(origin="/periwound_edge", name="periwound Details"),
                 rrb.Spatial3DView(origin="/features", name="Feature Vector Calculation"),
                 rrb.Spatial3DView(origin="/gmm", name="GMM Classification"),
                 rrb.Spatial3DView(origin="/mrf", name="MRF Constraints"),
@@ -2087,58 +2622,58 @@ class WoundModel3DMesh:
                     radii=0.002
                 ), static=True)
 
-        # Log tissue edge detection results with visibility filtering
-        if self.tissue_edge_faces:
-            # Filter tissue edge by visibility
-            tissue_edge_filtered = self.filter_tissue_edge_by_visibility(min_tissue_edge_visibility)
+        # Log periwound detection results with visibility filtering
+        if self.periwound_edge_faces:
+            # Filter periwound by visibility
+            periwound_edge_filtered = self.filter_periwound_edge_by_visibility(min_periwound_edge_visibility)
             
-            if tissue_edge_filtered:
-                print(f"Logging {len(tissue_edge_filtered)} tissue edge faces (filtered by visibility >= {min_tissue_edge_visibility})...")
-                tissue_edge_verts, tissue_edge_faces_idx, tissue_edge_colors = self.extract_submesh_from_faces(tissue_edge_filtered)
+            if periwound_edge_filtered:
+                print(f"Logging {len(periwound_edge_filtered)} periwound faces (filtered by visibility >= {min_periwound_edge_visibility})...")
+                periwound_edge_verts, periwound_edge_faces_idx, periwound_edge_colors = self.extract_submesh_from_faces(periwound_edge_filtered)
             else:
-                print(f"Warning: No tissue edge faces remain after visibility filtering (min={min_tissue_edge_visibility})")
-                tissue_edge_verts = np.array([])
+                print(f"Warning: No periwound faces remain after visibility filtering (min={min_periwound_edge_visibility})")
+                periwound_edge_verts = np.array([])
             
-            if len(tissue_edge_verts) > 0:
+            if len(periwound_edge_verts) > 0:
                 # Color by original mesh colors
-                if tissue_edge_colors is None:
-                    tissue_edge_colors = np.ones((len(tissue_edge_verts), 3), dtype=np.uint8) * 0
-                    tissue_edge_colors[:, 0] = 200  # Red
-                    tissue_edge_colors[:, 1] = 200  # Green
+                if periwound_edge_colors is None:
+                    periwound_edge_colors = np.ones((len(periwound_edge_verts), 3), dtype=np.uint8) * 0
+                    periwound_edge_colors[:, 0] = 200  # Red
+                    periwound_edge_colors[:, 1] = 200  # Green
                 else:
-                    tissue_edge_colors = (tissue_edge_colors * 255).astype(np.uint8) if np.max(tissue_edge_colors) <= 1.0 else tissue_edge_colors.astype(np.uint8)
+                    periwound_edge_colors = (periwound_edge_colors * 255).astype(np.uint8) if np.max(periwound_edge_colors) <= 1.0 else periwound_edge_colors.astype(np.uint8)
                 
                 # Log to world origin (full mesh view)
-                rr.log("/world/tissue_edge", rr.Mesh3D(
-                    vertex_positions=tissue_edge_verts.astype(np.float32),
-                    triangle_indices=tissue_edge_faces_idx,
-                    vertex_colors=tissue_edge_colors
+                rr.log("/world/periwound_edge", rr.Mesh3D(
+                    vertex_positions=periwound_edge_verts.astype(np.float32),
+                    triangle_indices=periwound_edge_faces_idx,
+                    vertex_colors=periwound_edge_colors
                 ), static=True)
                 
-                # Log to tissue_edge origin (dedicated view)
-                rr.log("/tissue_edge/mesh_original_colors", rr.Mesh3D(
-                    vertex_positions=tissue_edge_verts.astype(np.float32),
-                    triangle_indices=tissue_edge_faces_idx,
-                    vertex_colors=tissue_edge_colors
+                # Log to periwound_edge origin (dedicated view)
+                rr.log("/periwound_edge/mesh_original_colors", rr.Mesh3D(
+                    vertex_positions=periwound_edge_verts.astype(np.float32),
+                    triangle_indices=periwound_edge_faces_idx,
+                    vertex_colors=periwound_edge_colors
                 ), static=True)
             
-            # Log tissue edge by visibility (cyan to magenta gradient) - filtered version
-            if tissue_edge_filtered:
+            # Log periwound by visibility (cyan to magenta gradient) - filtered version
+            if periwound_edge_filtered:
                 visibility_face_colors_filtered = self._create_visibility_colormap(
-                    {f: self.tissue_edge_visibility_count[f] for f in tissue_edge_filtered if f in self.tissue_edge_visibility_count}
+                    {f: self.periwound_edge_visibility_count[f] for f in periwound_edge_filtered if f in self.periwound_edge_visibility_count}
                 )
-                self._log_faces_mesh_rr_with_colors(rr, "/world/tissue_edge_by_visibility", 
-                                                    tissue_edge_filtered, visibility_face_colors_filtered)
-                self._log_faces_mesh_rr_with_colors(rr, "/tissue_edge/by_visibility", 
-                                                    tissue_edge_filtered, visibility_face_colors_filtered)
+                self._log_faces_mesh_rr_with_colors(rr, "/world/periwound_edge_by_visibility", 
+                                                    periwound_edge_filtered, visibility_face_colors_filtered)
+                self._log_faces_mesh_rr_with_colors(rr, "/periwound_edge/by_visibility", 
+                                                    periwound_edge_filtered, visibility_face_colors_filtered)
             
-            # Log tissue edge statistics as text
-            if self.tissue_edge_visibility_count:
-                vis_counts = list(self.tissue_edge_visibility_count.values())
-                tissue_edge_stats = f"""
-Tissue Edge Detection Results:
-Total Tissue Edge Faces: {len(self.tissue_edge_faces)}
-Filtered Tissue Edge Faces (visibility >= {min_tissue_edge_visibility}): {len(tissue_edge_filtered)}
+            # Log periwound statistics as text
+            if self.periwound_edge_visibility_count:
+                vis_counts = list(self.periwound_edge_visibility_count.values())
+                periwound_edge_stats = f"""
+periwound Detection Results:
+Total periwound Faces: {len(self.periwound_edge_faces)}
+Filtered periwound Faces (visibility >= {min_periwound_edge_visibility}): {len(periwound_edge_filtered)}
 
 Visibility Statistics (all detected):
 - Min views: {min(vis_counts)}
@@ -2148,26 +2683,26 @@ Visibility Statistics (all detected):
 
 Visibility Statistics (filtered):
                 """
-                if tissue_edge_filtered:
-                    filtered_vis_counts = [self.tissue_edge_visibility_count[f] for f in tissue_edge_filtered]
-                    tissue_edge_stats += f"""- Min views: {min(filtered_vis_counts)}
+                if periwound_edge_filtered:
+                    filtered_vis_counts = [self.periwound_edge_visibility_count[f] for f in periwound_edge_filtered]
+                    periwound_edge_stats += f"""- Min views: {min(filtered_vis_counts)}
 - Max views: {max(filtered_vis_counts)}
 - Mean views: {np.mean(filtered_vis_counts):.2f}
 - Median views: {np.median(filtered_vis_counts):.2f}
 """
                 
-                tissue_edge_stats += f"""\nColor Statistics (across detected tissue edges):
+                periwound_edge_stats += f"""\nColor Statistics (across detected periwounds):
                 """
-                if self.tissue_edge_mean_color:
-                    mean_colors = np.array([self.tissue_edge_mean_color[f] for f in self.tissue_edge_faces if f in self.tissue_edge_mean_color])
+                if self.periwound_edge_mean_color:
+                    mean_colors = np.array([self.periwound_edge_mean_color[f] for f in self.periwound_edge_faces if f in self.periwound_edge_mean_color])
                     if len(mean_colors) > 0:
-                        tissue_edge_stats += f"\nMean Color (RGB):\n- R: {np.mean(mean_colors[:, 0]):.3f}\n- G: {np.mean(mean_colors[:, 1]):.3f}\n- B: {np.mean(mean_colors[:, 2]):.3f}\n"
+                        periwound_edge_stats += f"\nMean Color (RGB):\n- R: {np.mean(mean_colors[:, 0]):.3f}\n- G: {np.mean(mean_colors[:, 1]):.3f}\n- B: {np.mean(mean_colors[:, 2]):.3f}\n"
                     
-                    std_colors = np.array([self.tissue_edge_color_std[f] for f in self.tissue_edge_faces if f in self.tissue_edge_color_std])
+                    std_colors = np.array([self.periwound_edge_color_std[f] for f in self.periwound_edge_faces if f in self.periwound_edge_color_std])
                     if len(std_colors) > 0:
-                        tissue_edge_stats += f"\nColor Std (RGB):\n- R: {np.mean(std_colors[:, 0]):.3f}\n- G: {np.mean(std_colors[:, 1]):.3f}\n- B: {np.mean(std_colors[:, 2]):.3f}"
+                        periwound_edge_stats += f"\nColor Std (RGB):\n- R: {np.mean(std_colors[:, 0]):.3f}\n- G: {np.mean(std_colors[:, 1]):.3f}\n- B: {np.mean(std_colors[:, 2]):.3f}"
                 
-                rr.log("/tissue_edge/stats", rr.TextDocument(tissue_edge_stats), static=True)
+                rr.log("/periwound_edge/stats", rr.TextDocument(periwound_edge_stats), static=True)
         
         # === Feature Vector Calculation Visualization ===
         if self.semantic_fitted_plane is not None and self.semantic_feature_colormaps:
@@ -2221,19 +2756,27 @@ Visibility Statistics (filtered):
         if self.semantic_class_samples:
             print("Logging class samples and GMM models to Rerun...")
             
-            # Define colors for each class
+            # Define colors for each class (3-class: tissue, periwound, wound)
             class_colors = {
-                "tissue": [0, 150, 255],  # Light blue
-                "wound_edge": [255, 200, 0],  # Orange
-                "wound": [255, 0, 0]  # Red
+                "tissue": [0, 150, 255],    # Blue
+                "periwound": [255, 165, 0], # Orange
+                "wound": [255, 0, 0]        # Red
             }
             
-            # Log class samples
+            # Log class samples for all three classes
             for class_name, sample_indices in self.semantic_class_samples.items():
                 if sample_indices:
-                    self._log_faces_mesh_rr(rr, f"/gmm/{class_name}_samples", 
-                                          set(sample_indices), 
-                                          class_colors.get(class_name, [128, 128, 128]))
+                    color = class_colors.get(class_name, [128, 128, 128])
+                    self._log_faces_mesh_rr(rr, f"/gmm/samples/{class_name}",
+                                          set(sample_indices), color)
+                    self._log_faces_mesh_rr(rr, f"/world/gmm_samples/{class_name}",
+                                          set(sample_indices), color)
+            
+            # Log all samples together with class colours for world view
+            sample_stats = "GMM Training Samples:\n\n"
+            for class_name, sample_indices in self.semantic_class_samples.items():
+                sample_stats += f"{class_name.upper()}: {len(sample_indices)} faces\n"
+            rr.log("/gmm/samples/stats", rr.TextDocument(sample_stats), static=True)
             
             # Log GMM model statistics
             gmm_stats = "GMM Model Statistics:\n\n"
@@ -2255,19 +2798,94 @@ Visibility Statistics (filtered):
             
             rr.log("/gmm/model_stats", rr.TextDocument(gmm_stats), static=True)
         
+            # === GMM Softmaxed Posterior Probability Visualization ===
+            # Shows the normalized posterior probabilities P(class | features) after softmax.
+            # High values (green) = high confidence the face belongs to that class.
+            # Low values (red)   = low confidence the face belongs to that class.
+            if self.semantic_wound_prob and self.semantic_tissue_prob:
+                print("Logging GMM softmaxed posteriors to Rerun...")
+                
+                # Visualize per-class posterior probabilities (3-class: tissue, periwound, wound)
+                class_prob_maps = [("tissue", self.semantic_tissue_prob),
+                                   ("wound", self.semantic_wound_prob)]
+                if self.semantic_periwound_prob:
+                    class_prob_maps.insert(1, ("periwound", self.semantic_periwound_prob))
+                
+                for cls_name, prob_map in class_prob_maps:
+                    prob_colormap = self._create_confidence_colormap(prob_map)
+                    self._log_faces_mesh_rr_with_colors(
+                        rr, f"/gmm/{cls_name}_posterior_probability",
+                        set(prob_colormap.keys()), prob_colormap
+                    )
+                
+                # Also log the posterior probability difference (wound - tissue):
+                # Positive (green) = more wound-like, Negative (red) = more tissue-like
+                posterior_diff_map = {}
+                for face_idx in self.semantic_wound_prob:
+                    diff = self.semantic_wound_prob[face_idx] - self.semantic_tissue_prob.get(face_idx, 0.0)
+                    posterior_diff_map[face_idx] = diff
+                
+                diff_values = np.array(list(posterior_diff_map.values()))
+                abs_max = max(abs(np.percentile(diff_values, 2)), abs(np.percentile(diff_values, 98)), 1e-9)
+                diff_colormap = {}
+                for face_idx, diff_val in posterior_diff_map.items():
+                    # Map [-1.0, +1.0] to [0, 1]: 0=tissue-like(red), 1=wound-like(green)
+                    norm_val = np.clip((diff_val + 1.0) / 2.0, 0.0, 1.0)
+                    diff_colormap[face_idx] = self._confidence_to_color(norm_val)
+                
+                self._log_faces_mesh_rr_with_colors(
+                    rr, "/gmm/posterior_difference_wound_minus_tissue",
+                    set(diff_colormap.keys()), diff_colormap
+                )
+                
+                # Stats text
+                wound_probs = np.array(list(self.semantic_wound_prob.values()))
+                tissue_probs = np.array(list(self.semantic_tissue_prob.values()))
+                posterior_stats = f"""GMM Softmaxed Posterior Probabilities:
+
+Wound posterior P(wound | features):
+  min: {np.min(wound_probs):.4f}  max: {np.max(wound_probs):.4f}
+  mean: {np.mean(wound_probs):.4f}  std: {np.std(wound_probs):.4f}
+
+Tissue posterior P(tissue | features):
+  min: {np.min(tissue_probs):.4f}  max: {np.max(tissue_probs):.4f}
+  mean: {np.mean(tissue_probs):.4f}  std: {np.std(tissue_probs):.4f}
+"""
+                if self.semantic_periwound_prob:
+                    periwound_probs = np.array(list(self.semantic_periwound_prob.values()))
+                    posterior_stats += f"""
+Periwound posterior P(periwound | features):
+  min: {np.min(periwound_probs):.4f}  max: {np.max(periwound_probs):.4f}
+  mean: {np.mean(periwound_probs):.4f}  std: {np.std(periwound_probs):.4f}
+"""
+                posterior_stats += f"""
+Difference (wound - tissue):
+  min: {np.min(diff_values):.4f}  max: {np.max(diff_values):.4f}
+  mean: {np.mean(diff_values):.4f}
+
+Interpretation (Viridis colormap):
+  Yellow (posterior > 0.5) = high confidence for that class
+  Dark purple (posterior < 0.5) = low confidence for that class
+  Posterior difference: yellow = wound-like (P(wound) > P(tissue)), purple = tissue-like
+"""
+                rr.log("/gmm/posterior_stats", rr.TextDocument(posterior_stats), static=True)
+
         # === MRF Constraints Visualization ===
         if self.semantic_posteriors_before_mrf:
             print("Logging posteriors (before and after MRF) to Rerun...")
             
-            # Create posterior colormaps for each class before MRF
+            # Create posterior colormaps for 3-class model before MRF (tissue, periwound, wound)
             tissue_prob_before = {}
-            edge_prob_before = {}
+            periwound_prob_before = {}
             wound_prob_before = {}
             
             for face_idx, posteriors_arr in self.semantic_posteriors_before_mrf.items():
                 tissue_prob_before[face_idx] = float(posteriors_arr[0])
-                edge_prob_before[face_idx] = float(posteriors_arr[1])
-                wound_prob_before[face_idx] = float(posteriors_arr[2])
+                if len(posteriors_arr) > 2:
+                    periwound_prob_before[face_idx] = float(posteriors_arr[1])
+                    wound_prob_before[face_idx] = float(posteriors_arr[2])
+                else:
+                    wound_prob_before[face_idx] = float(posteriors_arr[1])
             
             # Log before MRF
             if tissue_prob_before:
@@ -2276,11 +2894,11 @@ Visibility Statistics (filtered):
                                                     set(tissue_prob_before.keys()), 
                                                     tissue_colors_before)
             
-            if edge_prob_before:
-                edge_colors_before = self._create_confidence_colormap(edge_prob_before)
-                self._log_faces_mesh_rr_with_colors(rr, "/mrf/edge_prob_before_mrf", 
-                                                    set(edge_prob_before.keys()), 
-                                                    edge_colors_before)
+            if periwound_prob_before:
+                periwound_colors_before = self._create_confidence_colormap(periwound_prob_before)
+                self._log_faces_mesh_rr_with_colors(rr, "/mrf/periwound_prob_before_mrf", 
+                                                    set(periwound_prob_before.keys()), 
+                                                    periwound_colors_before)
             
             if wound_prob_before:
                 wound_colors_before = self._create_confidence_colormap(wound_prob_before)
@@ -2288,18 +2906,18 @@ Visibility Statistics (filtered):
                                                     set(wound_prob_before.keys()), 
                                                     wound_colors_before)
             
-            # Log after MRF (from semantic_tissue_prob, semantic_edge_prob, semantic_wound_prob)
+            # Log after MRF (from semantic_tissue_prob, semantic_periwound_prob, semantic_wound_prob for 3-class model)
             if self.semantic_tissue_prob:
                 tissue_colors_after = self._create_confidence_colormap(self.semantic_tissue_prob)
                 self._log_faces_mesh_rr_with_colors(rr, "/mrf/tissue_prob_after_mrf", 
                                                     set(self.semantic_tissue_prob.keys()), 
                                                     tissue_colors_after)
             
-            if self.semantic_edge_prob:
-                edge_colors_after = self._create_confidence_colormap(self.semantic_edge_prob)
-                self._log_faces_mesh_rr_with_colors(rr, "/mrf/edge_prob_after_mrf", 
-                                                    set(self.semantic_edge_prob.keys()), 
-                                                    edge_colors_after)
+            if self.semantic_periwound_prob:
+                periwound_colors_after = self._create_confidence_colormap(self.semantic_periwound_prob)
+                self._log_faces_mesh_rr_with_colors(rr, "/mrf/periwound_prob_after_mrf", 
+                                                    set(self.semantic_periwound_prob.keys()), 
+                                                    periwound_colors_after)
             
             if self.semantic_wound_prob:
                 wound_colors_after = self._create_confidence_colormap(self.semantic_wound_prob)
@@ -2309,6 +2927,7 @@ Visibility Statistics (filtered):
             
             # Log MRF label changes
             mrf_stats = "MRF Constraint Analysis:\n\n"
+            mrf_stats += f"Method: {getattr(self, 'semantic_mrf_method', 'unknown')}\n\n"
             label_changes = 0
             for face_idx in self.semantic_face_indices:
                 if face_idx in self.semantic_posteriors_before_mrf and face_idx in self.semantic_posteriors:
@@ -2323,9 +2942,100 @@ Visibility Statistics (filtered):
             mrf_stats += f"Relabeling percentage: {100*label_changes/max(1, len(self.semantic_face_indices)):.2f}%"
             
             rr.log("/mrf/constraint_stats", rr.TextDocument(mrf_stats), static=True)
+            
+            # === Mean Field Posteriors Visualization (only if mean_field method used) ===
+            if getattr(self, 'semantic_mrf_method', None) == "mean_field" and getattr(self, 'semantic_mrf_posteriors', {}):
+                print("Logging mean field refined posteriors to Rerun...")
+                
+                # Extract mean field posteriors (3-class: tissue, periwound, wound)
+                mf_tissue_prob = {}
+                mf_periwound_prob = {}
+                mf_wound_prob = {}
+                for face_idx, probs in self.semantic_mrf_posteriors.items():
+                    mf_tissue_prob[face_idx] = float(probs[0])
+                    if len(probs) > 2:
+                        mf_periwound_prob[face_idx] = float(probs[1])
+                        mf_wound_prob[face_idx] = float(probs[2])
+                    else:
+                        mf_wound_prob[face_idx] = float(probs[1])
+                
+                # Log mean field tissue probability
+                if mf_tissue_prob:
+                    mf_tissue_colors = self._create_confidence_colormap(mf_tissue_prob)
+                    self._log_faces_mesh_rr_with_colors(rr, "/mrf/mean_field_tissue_prob", 
+                                                        set(mf_tissue_prob.keys()), 
+                                                        mf_tissue_colors)
+                
+                # Log mean field periwound probability
+                if mf_periwound_prob:
+                    mf_periwound_colors = self._create_confidence_colormap(mf_periwound_prob)
+                    self._log_faces_mesh_rr_with_colors(rr, "/mrf/mean_field_periwound_prob", 
+                                                        set(mf_periwound_prob.keys()), 
+                                                        mf_periwound_colors)
+                
+                # Log mean field wound probability
+                if mf_wound_prob:
+                    mf_wound_colors = self._create_confidence_colormap(mf_wound_prob)
+                    self._log_faces_mesh_rr_with_colors(rr, "/mrf/mean_field_wound_prob", 
+                                                        set(mf_wound_prob.keys()), 
+                                                        mf_wound_colors)
+                
+                # Log mean field probability difference (wound - tissue)
+                mf_diff_map = {}
+                for face_idx in mf_wound_prob:
+                    diff = mf_wound_prob[face_idx] - mf_tissue_prob.get(face_idx, 0.0)
+                    mf_diff_map[face_idx] = diff
+                
+                if mf_diff_map:
+                    diff_values = np.array(list(mf_diff_map.values()))
+                    mf_diff_colormap = {}
+                    for face_idx, diff_val in mf_diff_map.items():
+                        # Map [-1.0, +1.0] to [0, 1]: 0=tissue-like, 1=wound-like
+                        norm_val = np.clip((diff_val + 1.0) / 2.0, 0.0, 1.0)
+                        mf_diff_colormap[face_idx] = self._confidence_to_color(norm_val)
+                    
+                    self._log_faces_mesh_rr_with_colors(
+                        rr, "/mrf/mean_field_prob_diff_wound_minus_tissue",
+                        set(mf_diff_colormap.keys()), mf_diff_colormap
+                    )
+                    
+                    # Mean field statistics
+                    mf_wound_vals = np.array(list(mf_wound_prob.values()))
+                    mf_tissue_vals = np.array(list(mf_tissue_prob.values()))
+                    mf_stats = f"""Mean Field Approximation Results:
+
+Tissue posterior P(tissue):
+  min: {np.min(mf_tissue_vals):.4f}  max: {np.max(mf_tissue_vals):.4f}
+  mean: {np.mean(mf_tissue_vals):.4f}  std: {np.std(mf_tissue_vals):.4f}
+"""
+                    if mf_periwound_prob:
+                        mf_periwound_vals = np.array(list(mf_periwound_prob.values()))
+                        mf_stats += f"""
+Periwound posterior P(periwound):
+  min: {np.min(mf_periwound_vals):.4f}  max: {np.max(mf_periwound_vals):.4f}
+  mean: {np.mean(mf_periwound_vals):.4f}  std: {np.std(mf_periwound_vals):.4f}
+"""
+                    mf_stats += f"""
+Wound posterior P(wound):
+  min: {np.min(mf_wound_vals):.4f}  max: {np.max(mf_wound_vals):.4f}
+  mean: {np.mean(mf_wound_vals):.4f}  std: {np.std(mf_wound_vals):.4f}
+
+Probability difference (wound - tissue):
+  min: {np.min(diff_values):.4f}  max: {np.max(diff_values):.4f}
+  mean: {np.mean(diff_values):.4f}
+
+Interpretation:
+  Yellow = high probability for that class
+  Dark purple = low probability for that class
+  Difference: yellow = wound-like, purple = tissue-like
+  
+NOTE: Mean field returns soft probabilities (not hard labels)
+      The visualization shows the refined belief distribution.
+"""
+                    rr.log("/mrf/mean_field_stats", rr.TextDocument(mf_stats), static=True)
 
         # Log confidence maps
-        if self.wound_confidence_map or self.tissue_edge_confidence_map:
+        if self.wound_confidence_map or self.periwound_edge_confidence_map:
 
             print("Logging confidence maps to Rerun...")
             
@@ -2339,14 +3049,14 @@ Visibility Statistics (filtered):
                                                     set(self.wound_confidence_map.keys()), 
                                                     wound_conf_colors)
             
-            # Tissue edge confidence map
-            if self.tissue_edge_confidence_map:
-                tissue_conf_colors = self._create_confidence_colormap(self.tissue_edge_confidence_map)
-                self._log_faces_mesh_rr_with_colors(rr, "/confidence/tissue_edge_confidence", 
-                                                    set(self.tissue_edge_confidence_map.keys()), 
+            # periwound confidence map
+            if self.periwound_edge_confidence_map:
+                tissue_conf_colors = self._create_confidence_colormap(self.periwound_edge_confidence_map)
+                self._log_faces_mesh_rr_with_colors(rr, "/confidence/periwound_edge_confidence", 
+                                                    set(self.periwound_edge_confidence_map.keys()), 
                                                     tissue_conf_colors)
-                self._log_faces_mesh_rr_with_colors(rr, "/world/tissue_edge_confidence", 
-                                                    set(self.tissue_edge_confidence_map.keys()), 
+                self._log_faces_mesh_rr_with_colors(rr, "/world/periwound_edge_confidence", 
+                                                    set(self.periwound_edge_confidence_map.keys()), 
                                                     tissue_conf_colors)
             
             # Overlapping faces visualization
@@ -2358,9 +3068,9 @@ Visibility Statistics (filtered):
                                                     self.overlapping_faces, 
                                                     overlap_wound_colors)
                 
-                # Color by tissue edge confidence for overlapping faces
-                overlap_tissue_colors = {f: self._confidence_to_color(self.tissue_edge_confidence_map[f]) 
-                                        for f in self.overlapping_faces if f in self.tissue_edge_confidence_map}
+                # Color by periwound confidence for overlapping faces
+                overlap_tissue_colors = {f: self._confidence_to_color(self.periwound_edge_confidence_map[f]) 
+                                        for f in self.overlapping_faces if f in self.periwound_edge_confidence_map}
                 self._log_faces_mesh_rr_with_colors(rr, "/confidence/overlapping_tissue_view", 
                                                     self.overlapping_faces, 
                                                     overlap_tissue_colors)
@@ -2383,11 +3093,11 @@ Visibility Statistics (filtered):
                                                     set(self.semantic_wound_prob.keys()),
                                                     wound_prob_colors)
 
-            if self.semantic_edge_prob:
-                edge_prob_colors = self._create_confidence_colormap(self.semantic_edge_prob)
-                self._log_faces_mesh_rr_with_colors(rr, "/confidence/semantic_edge_prob",
-                                                    set(self.semantic_edge_prob.keys()),
-                                                    edge_prob_colors)
+            if self.semantic_periwound_prob:
+                periwound_prob_colors = self._create_confidence_colormap(self.semantic_periwound_prob)
+                self._log_faces_mesh_rr_with_colors(rr, "/confidence/semantic_periwound_prob",
+                                                    set(self.semantic_periwound_prob.keys()),
+                                                    periwound_prob_colors)
 
             if self.semantic_tissue_prob:
                 tissue_prob_colors = self._create_confidence_colormap(self.semantic_tissue_prob)
@@ -2395,13 +3105,18 @@ Visibility Statistics (filtered):
                                                     set(self.semantic_tissue_prob.keys()),
                                                     tissue_prob_colors)
 
-            # Label-based view
+            # Label-based view (3-class: tissue, periwound, wound)
             tissue_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "tissue"}
-            edge_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "wound_edge"}
+            periwound_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "periwound"}
             wound_faces = {f for f, lbl in self.semantic_labels.items() if lbl == "wound"}
             self._log_faces_mesh_rr(rr, "/confidence/semantic_labels/tissue", tissue_faces, [0, 150, 255])
-            self._log_faces_mesh_rr(rr, "/confidence/semantic_labels/wound_edge", edge_faces, [255, 200, 0])
+            self._log_faces_mesh_rr(rr, "/confidence/semantic_labels/periwound", periwound_faces, [255, 200, 0])
             self._log_faces_mesh_rr(rr, "/confidence/semantic_labels/wound", wound_faces, [255, 0, 0])
+            
+            # Boundary region (computed post-classification from adjacency)
+            if hasattr(self, 'wound_edge_face_indices') and self.wound_edge_face_indices:
+                self._log_faces_mesh_rr(rr, "/confidence/wound_edge_boundary", 
+                                        self.wound_edge_face_indices, [255, 200, 0])
 
         # Log statistics
         stats_text = f"""
@@ -2409,19 +3124,20 @@ Mesh Statistics:
 - Total Vertices: {len(self.vertices):,}
 - Total Faces: {len(self.faces):,}
 - Wound Faces: {len(self.wound_face_indices):,}
-- Tissue Edge Faces: {len(self.tissue_edge_faces):,}
+- periwound Faces: {len(self.periwound_edge_faces):,}
 - Spectators: {len(self.spectators)}
 - Masks Loaded: {sum(1 for s in self.spectators.values() if s.mask_loaded)}
 - Extruded Masks Loaded: {sum(1 for s in self.spectators.values() if s.extruded_mask_loaded)}
         """
         
-        if self.tissue_edge_visibility_count:
-            avg_vis = np.mean(list(self.tissue_edge_visibility_count.values()))
-            stats_text += f"\nTissue Edge Visibility:\n- Average: {avg_vis:.2f}\n"
+        if self.periwound_edge_visibility_count:
+            avg_vis = np.mean(list(self.periwound_edge_visibility_count.values()))
+            stats_text += f"\nperiwound Visibility:\n- Average: {avg_vis:.2f}\n"
         
         rr.log("/stats", rr.TextDocument(stats_text), static=True)
         
         print(f"Rerun visualization started: {session_name}")
+
 
     def _log_faces_mesh_rr(self, rr, path: str, face_set: Set[int], color: List[int]) -> None:
         """Log a mesh from a set of face indices for visualization in Rerun."""
@@ -2498,10 +3214,12 @@ Mesh Statistics:
     def _confidence_to_color(self, confidence: float) -> np.ndarray:
         """Convert a confidence value [0-1] to RGB color [0-255].
         
-        Color scheme:
-        - 0.0 (low): Red [255, 0, 0]
-        - 0.5 (medium): Yellow [255, 255, 0]
-        - 1.0 (high): Green [0, 255, 0]
+        Uses a viridis-like colormap for smooth perceptual gradient.
+        
+        Color scheme (viridis):
+        - 0.0 (low): Dark purple [68, 1, 84]
+        - 0.5 (medium): Teal [32, 145, 140]
+        - 1.0 (high): Yellow [253, 231, 37]
         
         Args:
             confidence: Confidence value [0-1]
@@ -2509,22 +3227,13 @@ Mesh Statistics:
         Returns:
             RGB color as numpy array [0-255]
         """
+        import matplotlib
         confidence = np.clip(confidence, 0.0, 1.0)
         
-        if confidence < 0.5:
-            # Red to Yellow (0.0 to 0.5)
-            t = confidence * 2.0
-            r = 255
-            g = int(t * 255)
-            b = 0
-        else:
-            # Yellow to Green (0.5 to 1.0)
-            t = (confidence - 0.5) * 2.0
-            r = int((1.0 - t) * 255)
-            g = 255
-            b = 0
-        
-        return np.array([r, g, b], dtype=np.uint8)
+        cmap = matplotlib.colormaps['viridis']
+        rgba = cmap(confidence)  # Returns RGBA values [0-1]
+        rgb = np.array(rgba[:3]) * 255  # Extract RGB, ensure numpy array, scale to [0-255]
+        return np.clip(rgb, 0, 255).astype(np.uint8)
     
     def _get_confidence_stats_text(self) -> str:
         """Generate statistics text for confidence maps.
@@ -2549,12 +3258,12 @@ Wound Confidence Map:
 - Std dev: {np.std(wound_values):.3f}
 """
         
-        if self.tissue_edge_confidence_map:
-            tissue_values = list(self.tissue_edge_confidence_map.values())
+        if self.periwound_edge_confidence_map:
+            tissue_values = list(self.periwound_edge_confidence_map.values())
             stats += f"""
 
-Tissue Edge Confidence Map:
-- Total faces: {len(self.tissue_edge_confidence_map)}
+periwound Confidence Map:
+- Total faces: {len(self.periwound_edge_confidence_map)}
 - Min confidence: {np.min(tissue_values):.3f}
 - Max confidence: {np.max(tissue_values):.3f}
 - Mean confidence: {np.mean(tissue_values):.3f}
@@ -2565,7 +3274,7 @@ Tissue Edge Confidence Map:
         if self.overlapping_faces:
             stats += f"""
 
-Overlapping Faces (seen in both wound and tissue edge):
+Overlapping Faces (seen in both wound and periwound):
 - Total overlapping: {len(self.overlapping_faces)}
 """
             
@@ -2579,14 +3288,299 @@ Overlapping Faces (seen in both wound and tissue edge):
         
         stats += """
 
-Color Legend:
-- Red: Low confidence (0.0)
-- Yellow: Medium confidence (0.5)
-- Green: High confidence (1.0)
+Color Legend (Viridis):
+- Dark Purple: Low confidence (0.0)
+- Teal: Medium confidence (0.5)
+- Yellow: High confidence (1.0)
 """
         
         return stats
-    
+
+    def _build_feature_colormap_assets(self,
+                                        face_indices: List[int],
+                                        values: np.ndarray,
+                                        feature_name: str,
+                                        generate_artifacts: bool = True
+                                        ) -> Tuple[Dict[int, np.ndarray], Optional[np.ndarray], Optional[str]]:
+        """Create per-face colors, an optional gradient image, and stats text for a feature."""
+        if not face_indices:
+            return {}, None, None
+
+        values = np.asarray(values, dtype=np.float64)
+        if values.size == 0:
+            return {}, None, None
+
+        finite_mask = np.isfinite(values)
+        if not np.all(finite_mask):
+            if np.any(finite_mask):
+                fill_value = np.nanmedian(values[finite_mask])
+                values = np.where(finite_mask, values, fill_value)
+            else:
+                values = np.zeros_like(values)
+
+        style = self._get_feature_visual_style(feature_name)
+
+        if style.get("value_range") is not None:
+            vmin, vmax = style["value_range"]
+        else:
+            p_low, p_high = style.get("percentiles", (2.0, 98.0))
+            vmin, vmax = np.percentile(values, [p_low, p_high])
+            if np.isclose(vmin, vmax):
+                spread = max(abs(vmin), 1.0)
+                vmin -= 0.5 * spread
+                vmax += 0.5 * spread
+
+        diverging = style.get("diverging", False)
+        if diverging:
+            abs_max = style.get("abs_max")
+            if abs_max is None or abs_max <= 0:
+                abs_max = max(abs(vmin), abs(vmax), 1e-9)
+            vmin, vmax = -abs_max, abs_max
+            norm_vals = (values / abs_max + 1.0) * 0.5
+        else:
+            norm_vals = (values - vmin) / (vmax - vmin + 1e-9)
+
+        norm_vals = np.clip(norm_vals, 0.0, 1.0)
+        palette = style["palette"].astype(np.float32)
+        colors = self._interpolate_palette(norm_vals, palette)
+        face_color_map = {int(face_idx): colors[i] for i, face_idx in enumerate(face_indices)}
+
+        gradient_image = None
+        stats_text = None
+        if generate_artifacts:
+            label_specs = []
+            if diverging:
+                def normalize_div(val: float) -> float:
+                    if abs_max <= 1e-9:
+                        return 0.5
+                    return np.clip((val / abs_max + 1.0) * 0.5, 0.0, 1.0)
+
+                label_specs.append((normalize_div(-abs_max), f"{-abs_max:.3f}"))
+                label_specs.append((normalize_div(0.0), "0"))
+                label_specs.append((normalize_div(abs_max), f"{abs_max:.3f}"))
+            else:
+                def normalize_lin(val: float) -> float:
+                    return np.clip((val - vmin) / (vmax - vmin + 1e-9), 0.0, 1.0)
+
+                label_specs.append((normalize_lin(vmin), f"{vmin:.3f}"))
+                mid_val = (vmin + vmax) * 0.5
+                label_specs.append((normalize_lin(mid_val), f"{mid_val:.3f}"))
+                label_specs.append((normalize_lin(vmax), f"{vmax:.3f}"))
+
+            gradient_image = self._create_gradient_image(palette, label_specs)
+            stats_text = self._format_feature_stats(feature_name, values, (vmin, vmax), style)
+
+        return face_color_map, gradient_image, stats_text
+
+    def _get_feature_visual_style(self, feature_name: str) -> Dict[str, Any]:
+        """Return palette and normalization hints for a feature name."""
+        default_palette = np.array([
+            [68, 1, 84],
+            [58, 82, 139],
+            [32, 145, 140],
+            [94, 201, 98],
+            [253, 231, 37],
+        ], dtype=np.float32)
+
+        style = {
+            "palette": default_palette,
+            "percentiles": (2.0, 98.0),
+            "value_range": None,
+            "diverging": False,
+            "abs_max": None,
+            "description": feature_name,
+            "unit": None,
+        }
+
+        name = feature_name.lower()
+
+        if name.startswith("height_dev"):
+            style.update({
+                "palette": np.array([[0, 32, 255], [255, 255, 255], [255, 40, 0]], dtype=np.float32),
+                "diverging": False,
+                "description": "Height deviation",
+                "unit": "m",
+            })
+        elif name == "r_wound":
+            style.update({
+                "palette": np.array([[40, 60, 120], [255, 200, 0], [255, 40, 0]], dtype=np.float32),
+                "value_range": (0.0, 1.0),
+                "description": "Wound visibility ratio",
+            })
+        elif name == "r_tissue":
+            style.update({
+                "palette": np.array([[30, 20, 60], [60, 200, 140], [0, 255, 200]], dtype=np.float32),
+                "value_range": (0.0, 1.0),
+                "description": "Tissue visibility ratio",
+            })
+        elif name == "normal_dev":
+            style.update({
+                "palette": np.array([[0, 40, 130], [0, 200, 80], [255, 255, 0]], dtype=np.float32),
+                "value_range": (0.0, float(np.pi / 2)),
+                "description": "Normal deviation",
+                "unit": "rad",
+            })
+        elif name == "lab_b":
+            style.update({
+                "palette": np.array([[0, 70, 200], [245, 245, 245], [255, 200, 0]], dtype=np.float32),
+                "diverging": True,
+                "abs_max": 50.0,
+                "description": "LAB b channel",
+            })
+        elif name in ("dr", "db"):
+            style.update({
+                "palette": np.array([[0, 120, 255], [245, 245, 245], [255, 60, 60]], dtype=np.float32),
+                "diverging": True,
+                "abs_max": 1.5,
+                "description": f"YDrDb {feature_name.upper()} component",
+            })
+        elif name == "r":
+            style.update({
+                "palette": np.array([[0, 0, 0], [255, 80, 80]], dtype=np.float32),
+                "value_range": (0.0, 1.0),
+                "description": "Mean red channel",
+            })
+        elif name == "g":
+            style.update({
+                "palette": np.array([[0, 0, 0], [90, 255, 120]], dtype=np.float32),
+                "value_range": (0.0, 1.0),
+                "description": "Mean green channel",
+            })
+        elif name == "b":
+            style.update({
+                "palette": np.array([[0, 0, 0], [80, 160, 255]], dtype=np.float32),
+                "value_range": (0.0, 1.0),
+                "description": "Mean blue channel",
+            })
+        elif name == "curvature":
+            style.update({
+                "palette": np.array([[0, 80, 255], [240, 240, 240], [255, 50, 0]], dtype=np.float32),
+                "diverging": True,
+                "description": "Scale-adaptive curvature",
+                "unit": "m (Laplacian)",
+            })
+
+        return style
+
+    def _interpolate_palette(self, norm_values: np.ndarray, palette: np.ndarray) -> np.ndarray:
+        """Linearly interpolate between palette colors for normalized values."""
+        norm_values = np.asarray(norm_values, dtype=np.float64)
+        if palette is None or len(palette) == 0:
+            return np.tile(np.array([[200, 200, 200]], dtype=np.uint8), (len(norm_values), 1))
+
+        if len(palette) == 1:
+            return np.tile(palette[0].astype(np.uint8), (len(norm_values), 1))
+
+        scaled = np.clip(norm_values, 0.0, 1.0) * (len(palette) - 1)
+        lower_idx = np.floor(scaled).astype(int)
+        upper_idx = np.clip(lower_idx + 1, 0, len(palette) - 1)
+        frac = (scaled - lower_idx)[:, None]
+
+        lower_colors = palette[lower_idx]
+        upper_colors = palette[upper_idx]
+        colors = lower_colors + (upper_colors - lower_colors) * frac
+        return np.clip(colors, 0, 255).astype(np.uint8)
+
+    def _create_gradient_image(self,
+                                palette: np.ndarray,
+                                value_labels: Optional[List[Tuple[float, str]]] = None,
+                                width: int = 256,
+                                height: int = 48) -> Optional[np.ndarray]:
+        """Create a horizontal gradient image visualizing the palette with optional tick labels."""
+        if palette is None or len(palette) == 0:
+            return None
+
+        ramp = np.linspace(0.0, 1.0, width, dtype=np.float32)
+        colors = self._interpolate_palette(ramp, palette)
+        gradient = np.tile(colors[None, :, :], (height, 1, 1)).astype(np.uint8)
+
+        if value_labels:
+            for norm_pos, label in value_labels:
+                norm = np.clip(norm_pos, 0.0, 1.0)
+                x = int(norm * (width - 1))
+                gradient[: height // 3, max(0, x - 1): min(width, x + 2)] = 255
+                self._draw_text_on_image(gradient, label, x, height - 12)
+
+        return gradient
+
+    def _draw_text_on_image(self,
+                             image: np.ndarray,
+                             text: str,
+                             center_x: int,
+                             baseline_y: int,
+                             color: Tuple[int, int, int] = (255, 255, 255)) -> None:
+        """Render simple pixel text onto an RGB image (no external dependencies)."""
+        if image.size == 0 or not text:
+            return
+
+        font = {
+            "0": ["111", "101", "101", "101", "111"],
+            "1": ["010", "110", "010", "010", "111"],
+            "2": ["111", "001", "111", "100", "111"],
+            "3": ["111", "001", "111", "001", "111"],
+            "4": ["101", "101", "111", "001", "001"],
+            "5": ["111", "100", "111", "001", "111"],
+            "6": ["111", "100", "111", "101", "111"],
+            "7": ["111", "001", "010", "010", "010"],
+            "8": ["111", "101", "111", "101", "111"],
+            "9": ["111", "101", "111", "001", "111"],
+            "-": ["000", "010", "010", "000", "000"],
+            ".": ["000", "000", "000", "000", "010"],
+            " ": ["000", "000", "000", "000", "000"],
+        }
+        default_char = ["111", "101", "101", "101", "111"]
+
+        char_width = 4  # 3 px glyph + 1 px spacing
+        total_width = len(text) * char_width
+        start_x = max(0, min(image.shape[1] - total_width, center_x - total_width // 2))
+        y0 = max(0, min(image.shape[0] - 5, baseline_y))
+
+        for idx, char in enumerate(text):
+            glyph = font.get(char, default_char)
+            for row, pattern in enumerate(glyph):
+                for col, bit in enumerate(pattern):
+                    if bit == "1":
+                        x = start_x + idx * char_width + col
+                        y = y0 + row
+                        if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+                            image[y, x] = color
+
+    def _format_feature_stats(self,
+                                feature_name: str,
+                                values: np.ndarray,
+                                color_range: Tuple[float, float],
+                                style: Dict[str, Any]) -> str:
+        """Pretty-print statistics for a feature."""
+        values = np.asarray(values, dtype=np.float64)
+        stats = {
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values)),
+            "median": float(np.median(values)),
+            "p25": float(np.percentile(values, 25)),
+            "p75": float(np.percentile(values, 75)),
+        }
+
+        descriptor = style.get("description") or feature_name
+        unit = style.get("unit")
+        header = f"{descriptor} [{feature_name}]"
+        if unit:
+            header += f" ({unit})"
+
+        lines = [
+            header,
+            f"Color range: {color_range[0]:.4f} → {color_range[1]:.4f}",
+            f"Min / Max : {stats['min']:.4f} / {stats['max']:.4f}",
+            f"Mean ± Std : {stats['mean']:.4f} ± {stats['std']:.4f}",
+            f"Median (P25/P75): {stats['median']:.4f} ({stats['p25']:.4f} / {stats['p75']:.4f})",
+        ]
+
+        if style.get("diverging"):
+            lines.append("Scale centered at zero (diverging colormap).")
+
+        return "\n".join(lines)
+
     def _log_faces_mesh_rr_with_colors(self, rr, path: str, face_set: Set[int], 
                                        face_color_map: Dict[int, np.ndarray]) -> None:
         """Log a mesh with per-face colors for visualization in Rerun.
@@ -2676,24 +3670,24 @@ Color Legend:
                     'median': np.median(counts)
                 }
         
-        if self.tissue_edge_faces:
-            stats['tissue_edge_faces_count'] = len(self.tissue_edge_faces)
+        if self.periwound_edge_faces:
+            stats['periwound_edge_faces_count'] = len(self.periwound_edge_faces)
             
-            if self.tissue_edge_visibility_count:
-                counts = list(self.tissue_edge_visibility_count.values())
-                stats['tissue_edge_visibility_stats'] = {
+            if self.periwound_edge_visibility_count:
+                counts = list(self.periwound_edge_visibility_count.values())
+                stats['periwound_edge_visibility_stats'] = {
                     'min': min(counts),
                     'max': max(counts),
                     'mean': np.mean(counts),
                     'median': np.median(counts)
                 }
             
-            if self.tissue_edge_mean_color and self.tissue_edge_color_std:
+            if self.periwound_edge_mean_color and self.periwound_edge_color_std:
                 # Collect color statistics
-                mean_colors = np.array([self.tissue_edge_mean_color[f] for f in self.tissue_edge_faces if f in self.tissue_edge_mean_color])
-                std_colors = np.array([self.tissue_edge_color_std[f] for f in self.tissue_edge_faces if f in self.tissue_edge_color_std])
+                mean_colors = np.array([self.periwound_edge_mean_color[f] for f in self.periwound_edge_faces if f in self.periwound_edge_mean_color])
+                std_colors = np.array([self.periwound_edge_color_std[f] for f in self.periwound_edge_faces if f in self.periwound_edge_color_std])
                 
-                stats['tissue_edge_color_stats'] = {
+                stats['periwound_edge_color_stats'] = {
                     'mean_color': {
                         'R': float(np.mean(mean_colors[:, 0])) if len(mean_colors) > 0 else 0,
                         'G': float(np.mean(mean_colors[:, 1])) if len(mean_colors) > 0 else 0,
@@ -2707,10 +3701,10 @@ Color Legend:
                 }
         
         # Add confidence map statistics
-        if self.wound_confidence_map or self.tissue_edge_confidence_map:
+        if self.wound_confidence_map or self.periwound_edge_confidence_map:
             stats['confidence_maps'] = {
                 'wound_faces_with_confidence': len(self.wound_confidence_map),
-                'tissue_edge_faces_with_confidence': len(self.tissue_edge_confidence_map),
+                'periwound_edge_faces_with_confidence': len(self.periwound_edge_confidence_map),
                 'overlapping_faces': len(self.overlapping_faces)
             }
             
@@ -2723,9 +3717,9 @@ Color Legend:
                     'median': float(np.median(wound_conf_values))
                 }
             
-            if self.tissue_edge_confidence_map:
-                tissue_conf_values = list(self.tissue_edge_confidence_map.values())
-                stats['confidence_maps']['tissue_edge_confidence_stats'] = {
+            if self.periwound_edge_confidence_map:
+                tissue_conf_values = list(self.periwound_edge_confidence_map.values())
+                stats['confidence_maps']['periwound_edge_confidence_stats'] = {
                     'min': float(np.min(tissue_conf_values)),
                     'max': float(np.max(tissue_conf_values)),
                     'mean': float(np.mean(tissue_conf_values)),
@@ -2737,16 +3731,16 @@ Color Legend:
 
 def main():
     """
-    Example usage of mesh-based wound detection with tissue edge detection.
+    Example usage of mesh-based wound detection with periwound detection.
     """
     
     # Example paths (adjust to your data)
-    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense\poisson.ply")
-    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense")
-    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense\masks_wound_only_undistorted")
-    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense\masks_extruded_wound_only_undistorted")
-    output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense\wound_mesh.ply")
-    output_path_corrected = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense\wound_mesh_corrected.ply")
+    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\poisson_smoothed.ply")
+    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
+    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_wound_only_undistorted")
+    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_extruded_wound_only_undistorted")
+    output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\wound_mesh.ply")
+    output_path_corrected = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\wound_mesh_corrected.ply")
     
     try:
         # Initialize model
@@ -2764,7 +3758,7 @@ def main():
         print("\n=== Loading Wound Masks ===")
         wound_model.load_masks(mask_dir)
         
-        # Load extruded masks for tissue edge detection
+        # Load extruded masks for periwound detection
         print("\n=== Loading Extruded Masks ===")
         wound_model.load_extruded_masks(extruded_mask_dir)
         
@@ -2772,26 +3766,25 @@ def main():
         print("\n=== Processing Wound Segmentation ===")
         wound_model.process_wound_segmentation()
         
-        # Process tissue edge detection (difference between extruded and wound masks)
-        print("\n=== Processing Tissue Edge Detection ===")
-        wound_model.process_tissue_edge_detection()
-        
-        # Run semantic classification (feature-based)
+        # Run semantic classification (feature-based, 3-class: tissue, periwound, wound)
+        # Note: tissue face detection is automatically called within run_semantic_classification()
         print("\n=== Semantic Classification (Gaussian + MRF) ===")
         wound_model.run_semantic_classification(
-            tissue_ratio_thresh=0.05,
-            wound_ratio_thresh=0.6,
-            edge_ratio_thresh=0.6,
-            min_total_views=1,
-            tissue_visibility_percentile=70.0,
             ring_sizes=[1, 3],
             confidence_method="entropy",
-            lambda_smooth=1.0
+            lambda_smooth=2.0,
+            use_centroid_features=True,
+            use_height_deviation=True,
+            use_normal_deviation=False,
+            use_curvature=True,
+            color_space="lab_b",
+            mrf_method="mean_field"
         )
+
         
         # Plot visibility histograms
         print("\n=== Plotting Visibility Histograms ===")
-        output_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Fuss\dense")
+        output_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
         wound_model.plot_visibility_histograms(
             output_dir=output_dir,
             show_plot=False  # Set to True to display interactively
@@ -2810,16 +3803,16 @@ def main():
         
         # Get final wound mesh with mesh-specific filtering
         print("\n=== Extracting Wound Mesh ===")
-        # wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
-        #     min_visibility=3,  # Require visibility from multiple cameras
-        #     use_connectivity=True,  # Extract connected components
-        #     min_component_faces=100,  # Minimum size for valid component
-        #     use_closing=True,  # Apply morphological closing
-        #     closing_iterations=5,  # Number of closing iterations
-        #     closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
-        #     use_fill_holes=False,  # We'll use trimesh instead in correction step
-        #     hole_size=-1.0
-        # )
+        wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
+            min_visibility=3,  # Require visibility from multiple cameras
+            use_connectivity=True,  # Extract connected components
+            min_component_faces=100,  # Minimum size for valid component
+            use_closing=True,  # Apply morphological closing
+            closing_iterations=5,  # Number of closing iterations
+            closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
+            use_fill_holes=False,  # We'll use trimesh instead in correction step
+            hole_size=-1.0
+        )
         
         # Get initial statistics before correction
         # print("\n=== Initial Wound Mesh Statistics ===")
@@ -2833,7 +3826,7 @@ def main():
         
         # Launch visualization with all results
         print("\n=== Launching Visualization ===")
-        wound_model.visualize_with_rerun("WoundModel3DMesh_TissueEdge", min_tissue_edge_visibility=10)
+        wound_model.visualize_with_rerun("WoundModel3DMesh_TissueEdge", min_periwound_edge_visibility=10)
         
         print("\n=== Processing Complete ===")
         
