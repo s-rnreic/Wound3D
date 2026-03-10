@@ -244,6 +244,10 @@ class WoundModel3DMesh:
         self.periwound_edge_color_std = {}  # face_idx -> color std dev
         self.periwound_edge_camera_data = {}  # face_idx -> list of per-camera measurements
         
+        # Normal tissue tracking (healthy tissue unaffected by wound - from undistorted mask difference)
+        self.normal_tissue_face_indices = set()  # Faces detected in normal tissue region
+        self.normal_tissue_visibility_count = {}  # face_idx -> count of cameras seeing normal tissue
+        
         # Confidence maps based on visibility
         self.wound_confidence_map = {}  # face_idx -> confidence [0-1] based on wound visibility
         self.periwound_edge_confidence_map = {}  # face_idx -> confidence [0-1] based on periwound visibility
@@ -627,12 +631,12 @@ class WoundModel3DMesh:
 
         return np.unique(prim_ids).tolist()
     
-    def process_tissue_face_detection(self, max_mask_rays: int = 200000):
+    def process_periwound_face_detection(self, max_mask_rays: int = 200000):
         """
-        Detect tissue faces from the difference between extended masks and wound masks.
+        Detect periwound faces from the difference between extended masks and wound masks.
         
-        Tissue faces are defined as pixels in the extended_wound_mask but NOT in the wound_mask.
-        These represent the initial tissue region (boundary tissue around the wound).
+        Periwound faces are defined as pixels in the extended_wound_mask but NOT in the wound_mask.
+        These represent the initial periwound region (boundary tissue around the wound).
         
         Args:
             max_mask_rays: Maximum number of rays to cast per camera (for performance)
@@ -641,7 +645,7 @@ class WoundModel3DMesh:
             raise ValueError("Mesh must be loaded first")
         
         if not any(s.extruded_mask_loaded for s in self.spectators.values()):
-            print("Warning: No extruded masks loaded. Cannot detect tissue faces.")
+            print("Warning: No extruded masks loaded. Cannot detect periwound faces.")
             return
         
         print(f"Processing periwound face detection from mask differences...")
@@ -692,7 +696,94 @@ class WoundModel3DMesh:
         if periwound_visibility_count:
             print(f"  Average visibility: {np.mean(list(periwound_visibility_count.values())):.2f} cameras")
 
-
+    def process_tissue_face_detection(self, 
+                                     undistorted_mask_dir: Path = None,
+                                     max_mask_rays: int = 200000):
+        """
+        Detect normal tissue faces from the difference between undistorted masks and extruded wound masks.
+        
+        Normal tissue faces are defined as pixels in the undistorted_mask but NOT in the extruded_wound_mask.
+        These represent the healthy tissue unaffected by the wound and its surroundings.
+        
+        Args:
+            undistorted_mask_dir: Directory containing undistorted wound masks. 
+                                 If None, loads from the spectator's mask_dir
+            max_mask_rays: Maximum number of rays to cast per camera (for performance)
+        """
+        if not self.model_loaded:
+            raise ValueError("Mesh must be loaded first")
+        
+        if not any(s.extruded_mask_loaded for s in self.spectators.values()):
+            print("Warning: No extruded masks loaded. Cannot detect tissue faces.")
+            return
+        
+        print(f"Processing normal tissue face detection from undistorted mask difference...")
+        
+        # Reset tracking
+        self.normal_tissue_face_indices = set()
+        normal_tissue_visibility_count = {}
+        
+        # Process each spectator
+        for spectator_name, spectator in self.spectators.items():
+            if not spectator.extruded_mask_loaded:
+                continue
+            
+            # Try to load undistorted mask for this spectator
+            undistorted_mask_data = None
+            
+            if undistorted_mask_dir is not None:
+                # Load from specified undistorted mask directory
+                undistorted_mask_path = Path(undistorted_mask_dir) / f"{spectator.image_name}.png"
+                if undistorted_mask_path.exists():
+                    try:
+                        import cv2
+                        undistorted_mask_data = cv2.imread(str(undistorted_mask_path), cv2.IMREAD_GRAYSCALE)
+                        if undistorted_mask_data is None or undistorted_mask_data.size == 0:
+                            print(f"  Warning: Could not load undistorted mask for {spectator_name}")
+                            continue
+                    except Exception as e:
+                        print(f"  Warning: Error loading undistorted mask for {spectator_name}: {e}")
+                        continue
+                else:
+                    print(f"  Warning: Undistorted mask not found for {spectator_name}")
+                    continue
+            elif spectator.mask_data is not None:
+                # Fall back to regular mask if no undistorted directory provided
+                undistorted_mask_data = spectator.mask_data.copy()
+            else:
+                print(f"  No mask data available for {spectator_name}")
+                continue
+            
+            # Create tissue difference mask: undistorted_mask AND NOT extruded_mask
+            # This identifies healthy tissue that's not in the extended wound area
+            tissue_mask = np.zeros_like(undistorted_mask_data, dtype=np.uint8)
+            tissue_mask[(undistorted_mask_data > 0) & (spectator.extruded_mask_data == 0)] = 255
+            
+            # Test if there's anything in the difference
+            if np.sum(tissue_mask) == 0:
+                print(f"  No normal tissue pixels found for {spectator_name}")
+                continue
+            
+            # Project tissue mask to mesh faces
+            tissue_faces = self._filter_faces_with_mask(
+                spectator=spectator,
+                mask=tissue_mask,
+                max_mask_rays=max_mask_rays
+            )
+            
+            # Update global tissue tracking
+            for face_idx in tissue_faces:
+                self.normal_tissue_face_indices.add(face_idx)
+                normal_tissue_visibility_count[face_idx] = normal_tissue_visibility_count.get(face_idx, 0) + 1
+            
+            print(f"  Tissue faces detected: {len(tissue_faces)}")
+        
+        # Store visibility counts
+        self.normal_tissue_visibility_count = normal_tissue_visibility_count
+        
+        print(f"Total normal tissue faces detected: {len(self.normal_tissue_face_indices)}")
+        if normal_tissue_visibility_count:
+            print(f"  Average visibility: {np.mean(list(normal_tissue_visibility_count.values())):.2f} cameras")
 
     def _get_total_views(self, face_idx: int) -> int:
         """Return total independent projections for a face.
@@ -819,7 +910,7 @@ class WoundModel3DMesh:
                                 centroids: np.ndarray,
                                 plane_normal: np.ndarray,
                                 plane_d: float,
-                                ratio_cache: Dict[int, Tuple[float, float, int]],
+                                ratio_cache: Dict[int, Tuple[float, float, float, int]],
                                 wound_r_thresh: float = 0.5) -> np.ndarray:
         """Compute scale-adaptive discrete mean curvature for each face.
 
@@ -838,7 +929,7 @@ class WoundModel3DMesh:
             centroids: (M, 3) face centroids for the full mesh.
             plane_normal: Normal of the fitted tissue reference plane.
             plane_d: Offset d of the plane equation  n · x + d = 0.
-            ratio_cache: {face_idx: (r_wound, r_tissue, total_views)}.
+            ratio_cache: {face_idx: (r_wound, r_periwound, r_tissue, total_views)}.
             wound_r_thresh: r_wound threshold used to estimate wound scale.
 
         Returns:
@@ -846,7 +937,7 @@ class WoundModel3DMesh:
         """
         # --- Estimate wound scale as adaptive ring radius ---
         n_wound_faces = sum(
-            1 for f in face_indices if ratio_cache.get(f, (0, 0, 0))[0] > wound_r_thresh
+            1 for f in face_indices if ratio_cache.get(f, (0, 0, 0, 0))[0] > wound_r_thresh
         )
         # Heuristic: ring ~ sqrt(wound_faces) / 2, clamped to [2, 40]
         adaptive_ring = int(np.clip(np.sqrt(max(n_wound_faces, 1)) / 2.0, 2, 40))
@@ -969,13 +1060,14 @@ class WoundModel3DMesh:
         for face_idx in range(len(self.faces)):
             wound_visibility = self.face_visibility_count.get(face_idx, 0)
             periwound_visibility = self.periwound_edge_visibility_count.get(face_idx, 0)
+            tissue_visibility = self.normal_tissue_visibility_count.get(face_idx, 0)
             total_views = len(self.cameras)  # Per-face denominator
 
             # Calculate ratios (coherent: r_wound + r_periwound <= 1.0)
             r_wound = wound_visibility / total_views if total_views > 0 else 0.0
             r_periwound = periwound_visibility / total_views if total_views > 0 else 0.0
-
-            ratio_cache[face_idx] = (r_wound, r_periwound, total_views)
+            r_tissue = tissue_visibility / total_views if total_views > 0 else 0.0
+            ratio_cache[face_idx] = (r_wound, r_periwound, r_tissue, total_views)
 
             face_indices.append(face_idx)
 
@@ -1026,7 +1118,7 @@ class WoundModel3DMesh:
 
         # Build feature list based on toggles
         if use_ratio_features:
-            feature_names = ["r_wound", "r_periwound"]
+            feature_names = ["r_wound", "r_periwound", "r_tissue"]
         else:
             feature_names = []
         features_list = []
@@ -1070,10 +1162,10 @@ class WoundModel3DMesh:
         # Build feature vectors
         features = []
         for i, face_idx in enumerate(face_indices):
-            r_wound, r_periwound, total_views = ratio_cache[face_idx]
+            r_wound, r_periwound, r_tissue, total_views = ratio_cache[face_idx]
             
             if use_ratio_features:
-                feat = [r_wound, r_periwound]
+                feat = [r_wound, r_periwound, r_tissue]
             else:
                 feat = []
 
@@ -1145,16 +1237,17 @@ class WoundModel3DMesh:
     def _fit_gaussian_models(self,
                              features: np.ndarray,
                              face_indices: List[int],
-                             ratio_cache: Dict[int, Tuple[float, float, int]],
+                             ratio_cache: Dict[int, Tuple[float, float, float, int]],
                              r_wound_thresh: float = 0.3,
                              r_periwound_thresh: float = 0.3,
+                             r_tissue_thresh: float = 0.2,
                              regularization: float = 1e-3) -> Dict[str, Dict[str, np.ndarray]]:
         """Fit Gaussian models for 3 classes: tissue, periwound, and wound.
         
         Uses visibility ratios to assign class labels:
         - Wound class: faces with r_wound > r_wound_thresh
         - Periwound class: faces with r_periwound > r_periwound_thresh (area around wound)
-        - Tissue class: faces with low visibility ratios (r_wound < r_wound_thresh AND r_periwound < r_periwound_thresh)
+        - Tissue class: faces with low visibility ratios (r_wound < r_wound_thresh AND r_periwound < r_periwound_thresh AND r_tissue > r_tissue_thresh)
         
         The periwound class represents the boundary tissue around the wound,
         detected from the difference between extruded and regular wound masks.
@@ -1166,11 +1259,11 @@ class WoundModel3DMesh:
         # Classify faces based on visibility ratios
         for face_idx in face_indices:
             feat_idx = idx_map[face_idx]
-            r_wound, r_periwound, _ = ratio_cache[face_idx]
+            r_wound, r_periwound, r_tissue, _ = ratio_cache[face_idx]
             
             is_wound = r_wound > r_wound_thresh
             is_periwound = r_periwound > r_periwound_thresh
-            is_tissue = r_wound == 0.0 and r_periwound == 0.0
+            is_tissue = r_tissue > r_tissue_thresh
             
             # Priority: wound > periwound > tissue
             if is_wound:
@@ -1203,7 +1296,7 @@ class WoundModel3DMesh:
                 X = np.vstack(samples)
                 # Use 2 components to capture multi-modal distributions;
                 # fall back to 1 if insufficient samples.
-                n_comp = min(2, max(1, len(X) // (X.shape[1] + 1)))
+                n_comp = min(1, max(1, len(X) // (X.shape[1] + 1)))
                 gmm = GaussianMixture(
                     n_components=n_comp,
                     covariance_type="full",
@@ -1446,7 +1539,8 @@ class WoundModel3DMesh:
                                     use_height_deviation: bool = True,
                                     use_normal_deviation: bool = True,
                                     use_curvature: bool = True,
-                                    color_space: str = "lab_b") -> None:
+                                    color_space: str = "lab_b",
+                                    undistorted_mask_dir: Path = None) -> None:
         """Run feature-based semantic classification for 3-class (tissue, periwound, wound) with feature toggles.
         
         Args:
@@ -1461,14 +1555,20 @@ class WoundModel3DMesh:
             use_normal_deviation: Include normal deviation features
             use_curvature: Include scale-adaptive discrete mean curvature feature
             color_space: Color space to use: "none", "rgb", "lab_b" (LAB b-channel only), or "ydrdb" (Dr and Db only)
+            undistorted_mask_dir: Optional directory with undistorted masks for tissue detection
         """
         if not self.faces_processed:
             raise ValueError("Must process wound segmentation first")
         if not self.topology_computed:
             self._compute_mesh_topology()
         
-        # Detect initial tissue faces from mask difference
-        self.process_tissue_face_detection(max_mask_rays=200000)
+        # Detect initial periwound faces from mask difference
+        self.process_periwound_face_detection(max_mask_rays=200000)
+        
+        # Detect normal tissue faces (optional, requires undistorted masks)
+        if undistorted_mask_dir is not None:
+            self.process_tissue_face_detection(undistorted_mask_dir=undistorted_mask_dir, 
+                                               max_mask_rays=200000)
 
         features, face_indices, ratio_cache = self._build_feature_vectors(
             ring_sizes=ring_sizes or [1, 3],
@@ -3739,6 +3839,7 @@ def main():
     model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
     mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_wound_only_undistorted")
     extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_extruded_wound_only_undistorted")
+    tissue_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_undistorted")
     output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\wound_mesh.ply")
     output_path_corrected = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\wound_mesh_corrected.ply")
     
@@ -3767,7 +3868,7 @@ def main():
         wound_model.process_wound_segmentation()
         
         # Run semantic classification (feature-based, 3-class: tissue, periwound, wound)
-        # Note: tissue face detection is automatically called within run_semantic_classification()
+        # Note: periwound and tissue are automatically detected within run_semantic_classification()
         print("\n=== Semantic Classification (Gaussian + MRF) ===")
         wound_model.run_semantic_classification(
             ring_sizes=[1, 3],
@@ -3778,7 +3879,8 @@ def main():
             use_normal_deviation=False,
             use_curvature=True,
             color_space="lab_b",
-            mrf_method="mean_field"
+            mrf_method="mean_field",
+            undistorted_mask_dir=tissue_mask_dir
         )
 
         
@@ -3802,22 +3904,17 @@ def main():
                 print(f"{key}: {value}")
         
         # Get final wound mesh with mesh-specific filtering
-        print("\n=== Extracting Wound Mesh ===")
-        wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
-            min_visibility=3,  # Require visibility from multiple cameras
-            use_connectivity=True,  # Extract connected components
-            min_component_faces=100,  # Minimum size for valid component
-            use_closing=True,  # Apply morphological closing
-            closing_iterations=5,  # Number of closing iterations
-            closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
-            use_fill_holes=False,  # We'll use trimesh instead in correction step
-            hole_size=-1.0
-        )
-        
-        # Get initial statistics before correction
-        # print("\n=== Initial Wound Mesh Statistics ===")
-        # print(f"Vertices: {len(wound_vertices)}")
-        # print(f"Faces: {len(wound_faces)}")
+        # print("\n=== Extracting Wound Mesh ===")
+        # wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
+        #     min_visibility=3,  # Require visibility from multiple cameras
+        #     use_connectivity=True,  # Extract connected components
+        #     min_component_faces=100,  # Minimum size for valid component
+        #     use_closing=True,  # Apply morphological closing
+        #     closing_iterations=5,  # Number of closing iterations
+        #     closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
+        #     use_fill_holes=False,  # We'll use trimesh instead in correction step
+        #     hole_size=-1.0
+        # )
         
         # Save the initial wound mesh
         # print("\n=== Saving Meshes ===")
