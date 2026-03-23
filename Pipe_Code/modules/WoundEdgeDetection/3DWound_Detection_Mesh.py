@@ -2662,7 +2662,7 @@ def main(visualization: bool = False):
         )
 
         if visualization:
-            from rerun_visualization import (
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
                 debug_visualize_gmm_samples_and_confidence,
                 debug_visualize_get_wound_mesh_process_rerun,
             )
