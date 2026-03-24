@@ -300,7 +300,7 @@ class WoundModel3DMesh:
         self._trimesh_cache = None
         self._feature_mean = None
         self._feature_std = None
-
+        
         # --- DEBUG_VIZ (safe to delete) ---
         # Stores debug-only semantic selection/visualization state.
         self.debug_gmm_sample_indices = {"periwound": [], "wound": []}
@@ -361,6 +361,7 @@ class WoundModel3DMesh:
         self._face_centroids_cache = None
         self._face_neighbors_cache = {}
         self._trimesh_cache = None
+
 
     def _initialize_face_objects(self) -> None:
         """Create one Faces object per face and reset all dynamic per-face values."""
@@ -432,40 +433,83 @@ class WoundModel3DMesh:
         # Try trimesh for fast topology extraction
         try:
             import trimesh
-            self._trimesh_cache = trimesh.Trimesh(
+
+            vertex_colors = None
+            if self.vertex_colors is not None and len(self.vertex_colors) == len(self.vertices):
+                vc = np.asarray(self.vertex_colors, dtype=np.float64)
+                vc = np.clip(vc, 0.0, 1.0)
+                vertex_colors = (vc * 255.0).astype(np.uint8)
+
+            mesh = trimesh.Trimesh(
                 vertices=self.vertices,
                 faces=self.faces,
+                vertex_colors=vertex_colors,
                 process=False,
                 maintain_order=True
             )
+            self._trimesh_cache = mesh
+            
+            # Requested trimesh references:
+            # FA: face adjacency index pairs
+            # FA_edges: shared edge vertices for each FA pair
+            FA = np.asarray(mesh.face_adjacency, dtype=np.int64)
+            FA_edges = np.asarray(mesh.face_adjacency_edges, dtype=np.int64)
 
             # Build face adjacency
             self.face_adjacency = defaultdict(list)
-            for f0, f1 in self._trimesh_cache.face_adjacency:
+            for f0, f1 in FA:
                 self.face_adjacency[int(f0)].append(int(f1))
                 self.face_adjacency[int(f1)].append(int(f0))
 
-            # Build edge adjacency: edge -> list of face indices
-            self.edge_adjacency = defaultdict(list)
-            edges_unique = np.asarray(self._trimesh_cache.edges_unique, dtype=np.int64)
-            edges_unique_inverse = np.asarray(self._trimesh_cache.edges_unique_inverse, dtype=np.int64)
+            # Build edge adjacency from FA/FA_edges (shared edges) and add boundary edges.
+            edge_faces = defaultdict(set)
+            for i, edge in enumerate(FA_edges):
+                if i >= len(FA):
+                    break
+                f0, f1 = int(FA[i][0]), int(FA[i][1])
+                edge_key = tuple(sorted((int(edge[0]), int(edge[1]))))
+                edge_faces[edge_key].add(f0)
+                edge_faces[edge_key].add(f1)
 
-            if edges_unique_inverse.size != 3 * len(self.faces):
-                raise ValueError("Unexpected edges_unique_inverse shape; cannot map faces to edges")
-
-            for face_idx, face in enumerate(self.faces):
-                face_edges = (
-                    (int(face[0]), int(face[1])),
-                    (int(face[1]), int(face[2])),
-                    (int(face[2]), int(face[0])),
-                )
-                base = face_idx * 3
-                for local_offset, _ in enumerate(face_edges):
-                    unique_edge_idx = int(edges_unique_inverse[base + local_offset])
-                    if unique_edge_idx < 0 or unique_edge_idx >= len(edges_unique):
+            # Add boundary edges so downstream boundary logic remains correct.
+            edges_unique = np.asarray(mesh.edges_unique, dtype=np.int64)
+            counts = np.bincount(
+                np.asarray(mesh.edges_unique_inverse, dtype=np.int64),
+                minlength=len(edges_unique),
+            )
+            boundary_edge_ids = np.flatnonzero(counts == 1)
+            if boundary_edge_ids.size > 0:
+                edge_to_id = {
+                    tuple(sorted((int(e[0]), int(e[1])))): int(idx)
+                    for idx, e in enumerate(edges_unique)
+                }
+                for edge_id in boundary_edge_ids:
+                    boundary_edge = tuple(sorted((
+                        int(edges_unique[edge_id][0]),
+                        int(edges_unique[edge_id][1]),
+                    )))
+                    if boundary_edge in edge_faces and len(edge_faces[boundary_edge]) > 0:
                         continue
-                    edge_vertices = tuple(sorted(edges_unique[unique_edge_idx].tolist()))
-                    self.edge_adjacency[edge_vertices].append(face_idx)
+
+                    # Assign the single incident face by scanning mesh faces once needed.
+                    incident_face = None
+                    boundary_id = edge_to_id.get(boundary_edge, None)
+                    if boundary_id is not None:
+                        for face_idx, face in enumerate(self.faces):
+                            tri_edges = (
+                                tuple(sorted((int(face[0]), int(face[1])))),
+                                tuple(sorted((int(face[1]), int(face[2])))),
+                                tuple(sorted((int(face[2]), int(face[0])))),
+                            )
+                            if boundary_edge in tri_edges:
+                                incident_face = int(face_idx)
+                                break
+                    if incident_face is not None:
+                        edge_faces[boundary_edge].add(incident_face)
+
+            self.edge_adjacency = defaultdict(list)
+            for edge_key, faces_for_edge in edge_faces.items():
+                self.edge_adjacency[edge_key] = sorted(list(faces_for_edge))
 
             print(
                 f"Topology computed (trimesh): {len(self.edge_adjacency)} edges, "
@@ -476,31 +520,8 @@ class WoundModel3DMesh:
         except Exception as e:
             print(f"Trimesh not available or failed ({e}), falling back to manual topology")
 
-        # Build edge adjacency: edge -> list of face indices
-        self.edge_adjacency = defaultdict(list)
-        for face_idx, face in enumerate(self.faces):
-            v0, v1, v2 = face
-            edges = [
-                tuple(sorted([v0, v1])),
-                tuple(sorted([v1, v2])),
-                tuple(sorted([v2, v0]))
-            ]
-            for edge in edges:
-                self.edge_adjacency[edge].append(face_idx)
-        
-        # Build face adjacency from edge adjacency
-        # Faces that share an edge are adjacent
-        self.face_adjacency = defaultdict(list)
-        for edge, face_list in self.edge_adjacency.items():
-            if len(face_list) >= 2:
-                # All faces sharing this edge are adjacent to each other
-                for i, face_i in enumerate(face_list):
-                    for face_j in face_list[i+1:]:
-                        self.face_adjacency[face_i].append(face_j)
-                        self.face_adjacency[face_j].append(face_i)
-        
-        print(f"Topology computed: {len(self.edge_adjacency)} edges, {len(self.face_adjacency)} faces with neighbors")
-        self.topology_computed = True
+    
+       
 
     
     def load_colmap_cameras(self, model_path: Path):
@@ -1807,6 +1828,101 @@ class WoundModel3DMesh:
             if len(face_list) == 1:
                 boundary_faces.add(face_list[0])
         return boundary_faces
+
+    def _count_boundary_loops_in_face_set(self, face_set: Set[int]) -> int:
+        """Count boundary loops for a face subset using trimesh + networkx.
+
+        The primary path follows:
+        1) build submesh
+        2) extract unique boundary edges (used by exactly one triangle)
+        3) build graph from boundary edges
+        4) count cycles via networkx.cycle_basis
+
+        Falls back to edge-component counting if trimesh/networkx are unavailable.
+        """
+        if not face_set:
+            return 0
+
+        # Primary implementation: trimesh unique edges + networkx cycle basis.
+        try:
+            import trimesh
+            import networkx as nx
+
+            face_list = np.array(sorted(face_set), dtype=np.int64)
+            if face_list.size == 0:
+                return 0
+
+            submesh = trimesh.Trimesh(
+                vertices=self.vertices,
+                faces=self.faces[face_list],
+                process=False,
+                maintain_order=True,
+            )
+
+            edges_unique = np.asarray(submesh.edges_unique, dtype=np.int64)
+            if len(edges_unique) == 0:
+                return 0
+
+            edges_unique_inverse = np.asarray(submesh.edges_unique_inverse, dtype=np.int64)
+            if edges_unique_inverse.size == 0:
+                return 0
+
+            edge_use_count = np.bincount(edges_unique_inverse, minlength=len(edges_unique))
+            boundary_edges = edges_unique[edge_use_count == 1]
+            if len(boundary_edges) == 0:
+                return 0
+
+            graph = nx.Graph()
+            graph.add_edges_from(boundary_edges.tolist())
+            cycles = nx.cycle_basis(graph)
+            return int(len(cycles))
+        except Exception:
+            # Fallback path below keeps behavior deterministic without extra deps.
+            pass
+
+        edge_count = defaultdict(int)
+        for face_idx in face_set:
+            if face_idx < 0 or face_idx >= len(self.faces):
+                continue
+            v0, v1, v2 = self.faces[face_idx]
+            edges = [
+                (min(v0, v1), max(v0, v1)),
+                (min(v1, v2), max(v1, v2)),
+                (min(v2, v0), max(v2, v0)),
+            ]
+            for edge in edges:
+                edge_count[edge] += 1
+
+        boundary_edges = [edge for edge, count in edge_count.items() if count == 1]
+        if not boundary_edges:
+            return 0
+
+        vertex_to_edges = defaultdict(list)
+        for edge in boundary_edges:
+            a, b = edge
+            vertex_to_edges[a].append(edge)
+            vertex_to_edges[b].append(edge)
+
+        unvisited = set(boundary_edges)
+        n_loops = 0
+
+        while unvisited:
+            n_loops += 1
+            stack = [next(iter(unvisited))]
+            while stack:
+                edge = stack.pop()
+                if edge not in unvisited:
+                    continue
+                unvisited.remove(edge)
+                a, b = edge
+                for next_edge in vertex_to_edges[a]:
+                    if next_edge in unvisited:
+                        stack.append(next_edge)
+                for next_edge in vertex_to_edges[b]:
+                    if next_edge in unvisited:
+                        stack.append(next_edge)
+
+        return n_loops
     
     def extract_submesh_from_faces(self, face_indices: Set[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -2313,14 +2429,21 @@ class WoundModel3DMesh:
 
         if use_closing:
             pre_close = set(filtered_faces)
-            filtered_faces = self.morphological_closing(
-                filtered_faces,
-                closing_iterations,
-                closing_kernel_size,
-                use_probability_validation=use_probability_validation,
-                wound_prob_threshold=wound_prob_threshold
-            )
-            self.added_faces_closing = set(filtered_faces) - pre_close
+            boundary_loop_count = self._count_boundary_loops_in_face_set(filtered_faces)
+            print(f"Boundary loop count before closing: {boundary_loop_count}")
+
+            if boundary_loop_count > 1:
+                filtered_faces = self.morphological_closing(
+                    filtered_faces,
+                    closing_iterations,
+                    closing_kernel_size,
+                    use_probability_validation=use_probability_validation,
+                    wound_prob_threshold=wound_prob_threshold
+                )
+                self.added_faces_closing = set(filtered_faces) - pre_close
+            else:
+                self.added_faces_closing = set()
+                print("Skipping morphological closing (boundary loop count <= 1)")
         else:
             self.added_faces_closing = set()
 
@@ -2596,9 +2719,6 @@ class WoundModel3DMesh:
 
         except ImportError:
             print("Open3D not available for mesh export")
-    
-
-
 
 
 def main(visualization: bool = False):
@@ -2619,7 +2739,7 @@ def main(visualization: bool = False):
         # Load mesh
         print("=== Loading Mesh ===")
         wound_model.load_mesh(mesh_path, compute_normals=True)
-        
+
         # Load COLMAP cameras
         print("\n=== Loading COLMAP Cameras ===")
         wound_model.load_colmap_cameras(model_path)
@@ -2713,4 +2833,4 @@ def main(visualization: bool = False):
 
 
 if __name__ == "__main__":
-    main(visualization=False)
+    main(visualization=True)
