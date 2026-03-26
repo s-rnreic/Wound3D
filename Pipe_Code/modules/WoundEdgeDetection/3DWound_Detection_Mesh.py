@@ -23,6 +23,7 @@ Date: February 2026
 
 import os
 import sys
+import importlib
 import numpy as np
 import time
 import traceback
@@ -2727,10 +2728,10 @@ def main(visualization: bool = False):
     """
     
     # Example paths (adjust to your data)
-    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\poisson_smoothed.ply")
-    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
-    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_wound_only_undistorted")
-    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_extruded_wound_only_undistorted")
+    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\poisson_Taubin_Quadratic_Taubin.ply")
+    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense")
+    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\masks_wound_only_undistorted")
+    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\masks_extruded_wound_only_undistorted")
 
     try:
         # Initialize model
@@ -2810,6 +2811,18 @@ def main(visualization: bool = False):
             hole_size=-1.0
         )
 
+        print("\n=== Measuring Wound Dimensions ===")
+        wound_measurement_result = None
+        try:
+            measurement_module = importlib.import_module(
+                "Pipe_Code.modules.WoundEdgeDetection.3DWound_Measurement_Mesh"
+            )
+            wound_measurement_result = measurement_module.measure_wound_dimensions_from_model(wound_model)
+            print(measurement_module.format_measurement_summary(wound_measurement_result))
+        except Exception as measurement_error:
+            print(f"Warning: wound measurement failed: {measurement_error}")
+            traceback.print_exc()
+
         if visualization:
             debug_visualize_get_wound_mesh_process_rerun(
                 wound_model,
@@ -2818,6 +2831,18 @@ def main(visualization: bool = False):
                 point_size=6.0,
                 spawn=True,
             )
+
+            if wound_measurement_result is not None:
+                try:
+                    measurement_module.visualize_wound_measurements_rerun(
+                        wound_model,
+                        measurement_result=wound_measurement_result,
+                        session_name="WoundMesh_Measurements",
+                        spawn=True,
+                    )
+                except Exception as visualization_error:
+                    print(f"Warning: measurement rerun visualization failed: {visualization_error}")
+                    traceback.print_exc()
 
         # Save the initial wound mesh
         # print("\n=== Saving Meshes ===")
