@@ -1676,9 +1676,6 @@ class WoundModel3DMesh:
             print("No Gaussian models could be fitted (insufficient seed data)")
             return
 
-        # if not models:
-        #     print("No Gaussian models could be fitted (insufficient seed data)")
-        #     return
 
         posteriors = self._compute_posteriors_from_models(
             features,
@@ -2728,10 +2725,10 @@ def main(visualization: bool = False):
     """
     
     # Example paths (adjust to your data)
-    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\poisson_Taubin_Quadratic_Taubin.ply")
-    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense")
-    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\masks_wound_only_undistorted")
-    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\masks_extruded_wound_only_undistorted")
+    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\poisson_smoothed.ply")
+    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
+    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_wound_only_undistorted")
+    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_extruded_wound_only_undistorted")
 
     try:
         # Initialize model
@@ -2784,18 +2781,17 @@ def main(visualization: bool = False):
 
         if visualization:
             from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
-                debug_visualize_gmm_samples_and_confidence,
-                debug_visualize_get_wound_mesh_process_rerun,
+                visualize_wound_assessment_rerun,
             )
 
-            print("\n=== DEBUG VIZ: GMM Samples + Confidence Map ===")
-            debug_visualize_gmm_samples_and_confidence(
+            visualize_wound_assessment_rerun(
                 wound_model,
-                show_gmm_samples=True,
-                show_confidence_mesh=True,
-                colormap="turbo",
-                point_size=8.0,
+                session_name="WoundModel3D_Assessment",
+                spawn=True,
+                image_root=model_path.parent,
             )
+
+      
 
         
         # Get final wound mesh with mesh-specific filtering
@@ -2823,33 +2819,13 @@ def main(visualization: bool = False):
             print(f"Warning: wound measurement failed: {measurement_error}")
             traceback.print_exc()
 
-        if visualization:
-            debug_visualize_get_wound_mesh_process_rerun(
-                wound_model,
-                session_name="WoundMesh_GetWoundMesh_Process",
-                colormap="turbo",
-                point_size=6.0,
-                spawn=True,
-            )
-
-            if wound_measurement_result is not None:
-                try:
-                    measurement_module.visualize_wound_measurements_rerun(
-                        wound_model,
-                        measurement_result=wound_measurement_result,
-                        session_name="WoundMesh_Measurements",
-                        spawn=True,
-                    )
-                except Exception as visualization_error:
-                    print(f"Warning: measurement rerun visualization failed: {visualization_error}")
-                    traceback.print_exc()
+     
 
         # Save the initial wound mesh
         # print("\n=== Saving Meshes ===")
         # wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
         # print(f"Saved initial wound mesh to: {output_path}")
         
-
         print("\n=== Processing Complete ===")
         
     except Exception as e:
