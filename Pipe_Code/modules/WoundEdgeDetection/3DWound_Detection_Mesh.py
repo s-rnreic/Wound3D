@@ -2112,11 +2112,6 @@ class WoundModel3DMesh:
         if not face_set:
             return face_set
         
-        def _validate_face_probability(face_idx: int, threshold: float) -> bool:
-            """Check if a face passes the wound probability threshold."""
-            if not use_probability_validation:
-                return True
-            return self._get_face_wound_probability(face_idx) >= threshold
         
         # Step 1: Expand wound to include enclosed non-wound faces
         if use_connectivity:
@@ -2153,10 +2148,9 @@ class WoundModel3DMesh:
                 validated_enclosed = set()
                 rejected_enclosed = set()
                 for face_idx in enclosed_faces_raw:
-                    if _validate_face_probability(face_idx, wound_prob_threshold):
-                        validated_enclosed.add(face_idx)
-                    else:
-                        rejected_enclosed.add(face_idx)
+
+                    validated_enclosed.add(face_idx)
+
                 enclosed_faces = validated_enclosed
                 
                 if rejected_enclosed:
