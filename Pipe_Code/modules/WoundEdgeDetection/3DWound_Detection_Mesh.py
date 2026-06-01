@@ -1605,6 +1605,24 @@ class WoundModel3DMesh:
         entropy /= np.log(posteriors.shape[1])
         return 1.0 - entropy
 
+    def _compute_wound_log_ratio_from_posteriors(self, posteriors: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Return signed and absolute log-ratio scores for wound vs periwound."""
+        # Purpose: create a signed wound-vs-periwound evidence score and its magnitude.
+        if posteriors is None or len(posteriors) == 0:
+            return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.float64)
+
+        if posteriors.shape[1] < 2:
+            raise ValueError("Expected at least two posterior columns for periwound and wound")
+
+        class_index = {name: idx for idx, name in enumerate(self.semantic_class_names)}
+        periwound_idx = class_index.get("periwound", 0)
+        wound_idx = class_index.get("wound", 1 if posteriors.shape[1] > 1 else 0)
+
+        periwound = np.clip(posteriors[:, periwound_idx], 1e-12, 1.0)
+        wound = np.clip(posteriors[:, wound_idx], 1e-12, 1.0)
+        log_ratio = np.log(wound) - np.log(periwound)
+        return log_ratio.astype(np.float64), np.abs(log_ratio).astype(np.float64)
+
     def run_semantic_classification(self,
                                     r_wound_thresh: float = 0.3,
                                     r_periwound_thresh: float = 0.7,
@@ -1708,24 +1726,53 @@ class WoundModel3DMesh:
             confidences = self._compute_confidence_from_posteriors(posteriors, method=confidence_method)
             final_posteriors = posteriors
 
+        self.semantic_posteriors_before_mrf = {
+            face_idx: posteriors[i].copy()
+            for i, face_idx in enumerate(face_indices)
+        }
+
+        log_ratio_values, log_ratio_strength_values = self._compute_wound_log_ratio_from_posteriors(final_posteriors)
+  
+        
         # Reset semantic state on all face objects before writing new labels/probabilities.
         for face_obj in self.face_objects:
             face_obj.label = None
             face_obj.confidence = None
             face_obj.periwound_prob = None
             face_obj.wound_prob = None
+            face_obj.posterior_log_ratio = None
+            face_obj.posterior_log_ratio_strength = None
 
         # Store per-face results (2-class: periwound=0, wound=1)
         self.semantic_posteriors = {}
+        self.semantic_log_ratio_values = {}
+        self.semantic_log_ratio_strength_values = {}
 
+        # Store per-face results (2-class: periwound=0, wound=1)
+            log_ratio_value = float(log_ratio_values[i])
+            log_ratio_strength = float(log_ratio_strength_values[i])
+        self.semantic_posteriors = {}
+            self.semantic_log_ratio_values[face_idx] = log_ratio_value
+            self.semantic_log_ratio_strength_values[face_idx] = log_ratio_strength
+
+
+                face_obj.posterior_log_ratio = log_ratio_value
+                face_obj.posterior_log_ratio_strength = log_ratio_strength
         for i, face_idx in enumerate(face_indices):
             probs = final_posteriors[i]
             label_name = self.semantic_class_names[int(labels[i])]
+            log_ratio_value = float(log_ratio_values[i])
+            log_ratio_strength = float(log_ratio_strength_values[i])
             self.semantic_posteriors[face_idx] = probs
+            self.semantic_log_ratio_values[face_idx] = log_ratio_value
+            self.semantic_log_ratio_strength_values[face_idx] = log_ratio_strength
+
             if face_idx < len(self.face_objects):
                 face_obj = self.face_objects[face_idx]
                 face_obj.periwound_prob = float(probs[0])
                 face_obj.wound_prob = float(probs[1])
+                face_obj.posterior_log_ratio = log_ratio_value
+                face_obj.posterior_log_ratio_strength = log_ratio_strength
                 face_obj.label = label_name
                 face_obj.confidence = float(confidences[i])
         
@@ -2201,6 +2248,34 @@ class WoundModel3DMesh:
             return float(self.semantic_posteriors[face_idx][1])
         return 0.0
 
+    def _get_face_posterior_pair(self, face_idx: int) -> Optional[np.ndarray]:
+        """Return [p_periwound, p_wound] for a face when available."""
+        # Purpose: centralize posterior lookup for downstream ratio/probability logic.
+        if getattr(self, "semantic_mrf_posteriors", None) and face_idx in self.semantic_mrf_posteriors:
+            return np.asarray(self.semantic_mrf_posteriors[face_idx], dtype=np.float64)
+        if self.semantic_posteriors and face_idx in self.semantic_posteriors:
+            return np.asarray(self.semantic_posteriors[face_idx], dtype=np.float64)
+        if 0 <= face_idx < len(self.face_objects):
+            face_obj = self.face_objects[face_idx]
+            if face_obj.periwound_prob is not None and face_obj.wound_prob is not None:
+                return np.asarray([face_obj.periwound_prob, face_obj.wound_prob], dtype=np.float64)
+        return None
+
+    def _get_face_wound_log_ratio(self, face_idx: int) -> float:
+        """Return signed log(p_wound / p_periwound) for a face."""
+        # Purpose: expose a numerically stable wound-vs-periwound evidence score per face.
+        posterior_pair = self._get_face_posterior_pair(face_idx)
+        if posterior_pair is None or len(posterior_pair) < 2:
+            return 0.0
+        periwound = float(np.clip(posterior_pair[0], 1e-12, 1.0))
+        wound = float(np.clip(posterior_pair[1], 1e-12, 1.0))
+        return float(np.log(wound) - np.log(periwound))
+
+    def _get_face_wound_log_ratio_strength(self, face_idx: int) -> float:
+        """Return absolute log-ratio magnitude for a face."""
+        # Purpose: expose evidence strength independent of class sign.
+        return abs(self._get_face_wound_log_ratio(face_idx))
+
     def _build_face_runtime_arrays(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Build fast per-face arrays from face objects for wound mesh extraction.
 
@@ -2334,88 +2409,476 @@ class WoundModel3DMesh:
         )
         return best_segment
 
-
-    def _select_wound_faces(self,
-                            min_visibility: int,
-                            use_probability_validation: bool,
-                            wound_prob_threshold: float,
-                            prob_segment_region_grow_ratio: float,
-                            ) -> Set[int]:
-        """Select wound faces from visibility/probability and segment checks."""
-
-        visibility_counts, wound_r_values, wound_prob_values = self._build_face_runtime_arrays()
-
-        if len(visibility_counts) == 0:
+    def _region_grow_combined_scores(self,
+                                     seed_faces: Set[int],
+                                     combined_scores: np.ndarray,
+                                     face_distance_hops: Optional[np.ndarray] = None,
+                                     max_distance_hops: Optional[int] = None,
+                                     max_iterations: int = 100) -> Set[int]:
+        """
+        Perform region growing using combined weighted scores.
+        
+        Expands from seed faces to adjacent faces that fit the current selected-score
+        distribution and exceed the growth threshold.
+        Uses a queue-based BFS approach to grow the region iteratively.
+        
+        Args:
+            seed_faces: Set of initial seed face indices (must have high combined scores)
+            combined_scores: Array of combined scores for each face (length = num_faces)
+            grow_threshold: Minimum combined score for a face to be included during growth
+            max_iterations: Maximum number of iterations to prevent infinite loops
+            
+        Returns:
+            Set of face indices after region growing
+        """
+        # Purpose: expand seed wound region based on multi-parameter combined scores with controlled growth.
+        if not seed_faces:
             return set()
+        
+        std_multiplier = 1.0
+        stats_refresh_interval = 50
+        min_std = 1e-6
 
-        visibility_mask = visibility_counts >= int(min_visibility)
-        # Fallback for cases where explicit visibility count is sparse but r is present.
-        visibility_mask |= wound_r_values >= (float(min_visibility) / max(len(self.spectators), 1))
-        initial_projected_faces = set(np.flatnonzero(visibility_mask).tolist())
-        self.initial_wound_faces_stage = set(initial_projected_faces)
+        def _compute_score_stats(face_ids: Set[int]) -> Tuple[float, float]:
+            values = [float(combined_scores[face_idx]) for face_idx in face_ids if 0 <= face_idx < len(combined_scores)]
+            if not values:
+                return 0.0, 0.0
+            return float(np.mean(values)), float(np.std(values))
 
-        if not initial_projected_faces:
-            print("Warning: No wound faces remain after filtering")
-            return set()
+        grown_faces = set(seed_faces)
+        queue = deque(seed_faces)
+        iterations = 0
+        added_count = 0
+        blocked_count = 0
+        blocked_by_distance = 0
 
-        if use_probability_validation:
-            prob_mask = wound_prob_values >= float(wound_prob_threshold)
-            filtered_faces = set(
-                f for f in initial_projected_faces if 0 <= f < len(prob_mask) and bool(prob_mask[f])
-            )
-            removed_by_prob = set(initial_projected_faces) - set(filtered_faces)
-            print(
-                f"Probability filtering: kept {len(filtered_faces)}/{len(initial_projected_faces)} "
-                f"faces (threshold={wound_prob_threshold:.2f}), removed {len(removed_by_prob)}"
-            )
-        else:
-            filtered_faces = set(initial_projected_faces)
+        selected_mean, selected_std = _compute_score_stats(grown_faces)
+        print(
+            f"Region grow seed stats: mean={selected_mean:.4f}, std={selected_std:.4f}, "
+            f"seed_count={len(grown_faces)}"
+        )
+        
+        while queue and iterations < max_iterations:
+            iterations += 1
+            face_idx = queue.popleft()
+            
+            # Get adjacent faces
+            adjacent_faces = self.face_adjacency.get(face_idx, [])
+            
+            for adj_face_idx in adjacent_faces:
+                # Skip if already in grown region
+                if adj_face_idx in grown_faces:
+                    continue
+                
+                # If a face was previously rejected, do not keep growing through it.
+                if adj_face_idx < 0 or adj_face_idx >= len(combined_scores):
+                    continue
 
-        if not filtered_faces:
-            print("Warning: No wound faces remain after probability filtering")
-            return set()
+                # Hard geometric gate: stop growth when a face is farther than the allowed hop distance
+                # from wound-supporting source faces.
+                if (
+                    face_distance_hops is not None
+                    and max_distance_hops is not None
+                    and 0 <= adj_face_idx < len(face_distance_hops)
+                ):
+                    hop_distance = face_distance_hops[adj_face_idx]
+                    if not np.isfinite(hop_distance) or hop_distance > float(max_distance_hops):
+                        blocked_by_distance += 1
+                        continue
+                
+                score = float(combined_scores[adj_face_idx])
+                score_distance = abs(score - selected_mean)
+                allowed_distance = std_multiplier * max(selected_std, min_std)
 
-        if use_probability_validation:
-            prob_segments = self._compute_probability_wound_segments(wound_prob_threshold)
-            selected_segment = set()
+                # Candidate must be close to the current selected distribution and above the floor.
+                if score_distance <= allowed_distance:
+                    grown_faces.add(adj_face_idx)
+                    queue.append(adj_face_idx)
+                    added_count += 1
+                else:
+                    blocked_count += 1
 
-            if len(prob_segments) >= 2:
-                selected_segment = self._select_probability_segment(prob_segments, set(initial_projected_faces))
-                before_segment_selection = set(filtered_faces)
-                filtered_faces = set(filtered_faces) & selected_segment
-                removed_by_segment = before_segment_selection - filtered_faces
-                if removed_by_segment:
-                    print(
-                        f"Segment selection removed {len(removed_by_segment)} faces outside selected probability segment"
-                    )
-            elif len(prob_segments) == 1:
-                selected_segment = set(prob_segments[0])
-
-            if selected_segment:
-                overlap_count = len(set(filtered_faces) & selected_segment)
-                coverage_ratio = overlap_count / max(len(selected_segment), 1)
-                boundary_accessible = self._is_component_accessible_from_boundary(selected_segment)
-
+            if iterations % stats_refresh_interval == 0 and grown_faces:
+                selected_mean, selected_std = _compute_score_stats(grown_faces)
                 print(
-                    f"Probability segment check: segments={len(prob_segments)}, "
-                    f"selected_faces={len(selected_segment)}, boundary_accessible={boundary_accessible}, "
-                    f"coverage_ratio={coverage_ratio:.3f}"
+                    f"Region grow stats refresh at iteration {iterations}: "
+                    f"mean={selected_mean:.4f}, std={selected_std:.4f}, "
+                    f"selected_count={len(grown_faces)}"
+                )
+        
+        print(
+            f"Region grow completed in {iterations} iterations, added {added_count} faces, "
+            f"blocked {blocked_count} faces, distance_blocked={blocked_by_distance}"
+        )
+        return grown_faces
+
+    def _compute_face_hop_distance_map(self,
+                                       source_faces: Set[int],
+                                       allowed_faces: Optional[Set[int]] = None) -> np.ndarray:
+        """Compute multi-source shortest hop distance to source faces on the face-adjacency graph.
+
+        Distances are in topological hops (0 at source faces, 1 for immediate neighbors, ...).
+        If allowed_faces is provided, BFS is restricted to that subset.
+        """
+        n_faces = len(self.faces) if self.faces is not None else 0
+        distances = np.full(n_faces, np.inf, dtype=np.float64)
+        if n_faces == 0 or not source_faces:
+            return distances
+
+        allowed = None if allowed_faces is None else set(allowed_faces)
+        frontier = deque()
+
+        for face_idx in source_faces:
+            if face_idx < 0 or face_idx >= n_faces:
+                continue
+            if allowed is not None and face_idx not in allowed:
+                continue
+            distances[face_idx] = 0.0
+            frontier.append(face_idx)
+
+        while frontier:
+            current_face = frontier.popleft()
+            current_dist = distances[current_face]
+            next_dist = current_dist + 1.0
+
+            for adj_face in self.face_adjacency.get(current_face, []):
+                if adj_face < 0 or adj_face >= n_faces:
+                    continue
+                if allowed is not None and adj_face not in allowed:
+                    continue
+                if next_dist < distances[adj_face]:
+                    distances[adj_face] = next_dist
+                    frontier.append(adj_face)
+
+        return distances
+
+    def _select_wound_faces(self) -> Set[int]:
+        """Select wound faces from visibility/probability and segment checks."""
+        # Purpose: produce a high-precision wound candidate set with staged evidence filters.
+        # if the filtering steps are too aggressive, this function should perform further iterations with lower thresholds rather than returning an empty set.
+   
+        # Three-way constrained region grow
+        # Step 1: Label all faces based on log_ratio_strength vs Tau and log_ratio sign
+        #         - strength >= Tau and log_ratio > 0  -> "wound_candidate"
+        #         - strength >= Tau and log_ratio <= 0 -> "periwound_candidate"
+        #         - strength < Tau                      -> "uncertain"
+        # Step 2: Perform the same region grow as in Option 2 but only on the
+        #         "wound_candidate" and "uncertain" faces, using the same
+        #         combined score and thresholds.
+        # Step 3: Select the resulting region-grown set as the final wound faces
+        #         but also keep the "uncertain" faces for later adjustments.
+
+
+        print("\n=== Option 3: Constrained Region Grow (wound_candidate + uncertain) ===")
+
+        # Option 3 hard distance gate parameters.
+        option3_distance_source_r_wound_threshold = 0.20
+        option3_max_distance_hops = 100
+
+        # Recreate Tau and labelings if not available (safe idempotent)
+        Tau = 5.0
+
+        # Build arrays of log-ratio and strength indexed by global face id
+        log_ratio_arr = np.fromiter(
+            (self.semantic_log_ratio_values.get(fi, 0.0) for fi in range(len(self.faces))),
+            dtype=np.float64,
+            count=len(self.faces),
+        )
+        strength_arr = np.fromiter(
+            (self.semantic_log_ratio_strength_values.get(fi, 0.0) for fi in range(len(self.faces))),
+            dtype=np.float64,
+            count=len(self.faces),
+        )
+
+        # STEP 1: Label faces
+        wound_candidates = set()
+        periwound_candidates = set()
+        uncertain_faces = set()
+
+        for face_idx in range(len(self.faces)):
+            strength = float(strength_arr[face_idx])
+            log_ratio = float(log_ratio_arr[face_idx])
+
+            if strength >= Tau:
+                if log_ratio > 0.0:
+                    wound_candidates.add(face_idx)
+                else:
+                    periwound_candidates.add(face_idx)
+            else:
+                uncertain_faces.add(face_idx)
+
+        print(f"Option3: classified faces - wound_candidates={len(wound_candidates)}, "
+                f"periwound_candidates={len(periwound_candidates)}, uncertain={len(uncertain_faces)}")
+
+        # Log three-way classification as colormap to rerun
+        try:
+            import rerun as rr
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
+                _safe_normalize,
+                _viridis_like_colormap,
+            )
+
+            if self.vertices is not None and self.faces is not None and len(self.faces) > 0:
+                # Create color array: red for wound, blue for periwound, gray for uncertain
+                label_colors = np.zeros((len(self.faces), 3), dtype=np.uint8)
+                
+                # Red for wound candidates
+                for fi in wound_candidates:
+                    if 0 <= fi < len(self.faces):
+                        label_colors[fi] = np.array([255, 0, 0], dtype=np.uint8)
+                
+                # Blue for periwound candidates
+                for fi in periwound_candidates:
+                    if 0 <= fi < len(self.faces):
+                        label_colors[fi] = np.array([0, 0, 255], dtype=np.uint8)
+                
+                # Gray for uncertain faces
+                for fi in uncertain_faces:
+                    if 0 <= fi < len(self.faces):
+                        label_colors[fi] = np.array([128, 128, 128], dtype=np.uint8)
+                
+                # Flatten for mesh visualization (repeat color for each vertex of triangle)
+                flat_vertex_positions = self.vertices[self.faces].reshape(-1, 3)
+                flat_triangle_indices = np.arange(len(self.faces) * 3, dtype=np.int32).reshape(-1, 3)
+                flat_vertex_colors = np.repeat(label_colors, 3, axis=0)
+
+                rr.init("WoundModel3D_Assessment_final", spawn=True)
+                rr.log(
+                    "/analysis/option3_three_way_labels",
+                    rr.Mesh3D(
+                        vertex_positions=np.ascontiguousarray(flat_vertex_positions, dtype=np.float64),
+                        triangle_indices=np.ascontiguousarray(flat_triangle_indices, dtype=np.int32),
+                        vertex_colors=np.ascontiguousarray(flat_vertex_colors, dtype=np.uint8),
+                    ),
+                    static=True,
+                )
+                print("✓ Logged three-way labels colormap to /analysis/option3_three_way_labels")
+                print("  Red: wound_candidates, Blue: periwound_candidates, Gray: uncertain")
+        except Exception as e:
+            print(f"Could not log three-way labels colormap: {e}")
+
+        # Ensure combined_scores exists (recompute same way as Option 2 for safety)
+        try:
+            combined_scores
+        except NameError:
+            weight_r_wound = 0.2
+            weight_r_periwound = 0.2
+            weight_log_ratio = 0.6
+            combined_scores = np.zeros(len(self.faces), dtype=np.float64)
+            for fi in range(len(self.faces)):
+                r_wound = float(self.face_objects[fi].r_wound or 0.0)
+                r_wound = np.clip(r_wound, 0.0, 1.0)
+                r_periwound = float(self.face_objects[fi].r_periwound or 0.0)
+                r_periwound = np.clip(r_periwound, 0.0, 1.0)
+                lr = float(log_ratio_arr[fi])
+                lr_norm = 1.0 / (1.0 + np.exp(-lr))
+                combined_scores[fi] = (
+                    weight_r_wound * r_wound +
+                    weight_r_periwound * (1.0 - r_periwound) +
+                    weight_log_ratio * lr_norm
                 )
 
-                if (not boundary_accessible) and (coverage_ratio < prob_segment_region_grow_ratio):
-                    seeds = set(filtered_faces) & selected_segment
-                    grown_faces = self._region_grow_within_segment(seeds, selected_segment)
-                    if grown_faces:
-                        filtered_faces = set(filtered_faces) | grown_faces
-                    else:
-                        filtered_faces = set(filtered_faces) | selected_segment
-                    print(
-                        f"Region grow in inaccessible segment: coverage_ratio={coverage_ratio:.3f} < "
-                        f"{prob_segment_region_grow_ratio:.3f}. "
-                        f"Using full selected segment ({len(selected_segment)} faces)."
-                    )
+        
+        try:
+            import rerun as rr
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
+                _safe_normalize,
+                _viridis_like_colormap,
+            )
 
-        self.probability_filtered_wound_faces_stage = set(filtered_faces)
+            if self.vertices is not None and self.faces is not None and len(self.faces) > 0:
+                combined_score_colors = _viridis_like_colormap(_safe_normalize(combined_scores))
+                flat_vertex_positions = self.vertices[self.faces].reshape(-1, 3)
+                flat_triangle_indices = np.arange(len(self.faces) * 3, dtype=np.int32).reshape(-1, 3)
+                flat_vertex_colors = np.repeat(combined_score_colors, 3, axis=0)
+
+                rr.log(
+                    "/analysis/option3_combined_score",
+                    rr.Mesh3D(
+                        vertex_positions=np.ascontiguousarray(flat_vertex_positions, dtype=np.float64),
+                        triangle_indices=np.ascontiguousarray(flat_triangle_indices, dtype=np.int32),
+                        vertex_colors=np.ascontiguousarray(flat_vertex_colors, dtype=np.uint8),
+                    ),
+                    static=True,
+                )
+        except Exception as e:
+            print(f"Could not log masked combined score colormap: {e}")
+        
+        # STEP 2: Restrict region grow to wound_candidate + uncertain faces
+        allowed_faces = set(wound_candidates) | set(uncertain_faces)
+
+        # Build source faces for distance map from r_wound support within the allowed set.
+        distance_source_faces = {
+            fi for fi in allowed_faces
+            if 0 <= fi < len(self.face_objects)
+            and float(self.face_objects[fi].r_wound or 0.0) >= option3_distance_source_r_wound_threshold
+        }
+
+        if not distance_source_faces:
+            # Fallback keeps map valid even when r_wound support is sparse.
+            distance_source_faces = set(seed for seed in wound_candidates if seed in allowed_faces)
+
+        # Compute hop distance on the full mesh so the gate reflects global topology.
+        face_distance_hops = self._compute_face_hop_distance_map(
+            source_faces=distance_source_faces,
+        )
+
+        # Log the hop-distance field as a full-mesh colormap for rerun.
+        try:
+            import rerun as rr
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
+                _safe_normalize,
+                _viridis_like_colormap,
+            )
+
+            if self.vertices is not None and self.faces is not None and len(self.faces) > 0:
+                distance_for_viz = np.asarray(face_distance_hops, dtype=np.float64).copy()
+                finite_mask = np.isfinite(distance_for_viz)
+                if np.any(finite_mask):
+                    max_finite_distance = float(np.max(distance_for_viz[finite_mask]))
+                    distance_for_viz[~finite_mask] = max_finite_distance + 1.0
+                else:
+                    distance_for_viz[:] = 0.0
+
+                distance_colors = _viridis_like_colormap(_safe_normalize(distance_for_viz))
+                flat_vertex_positions = self.vertices[self.faces].reshape(-1, 3)
+                flat_triangle_indices = np.arange(len(self.faces) * 3, dtype=np.int32).reshape(-1, 3)
+                flat_vertex_colors = np.repeat(distance_colors, 3, axis=0)
+
+                rr.log(
+                    "/analysis/option3_distance_hops",
+                    rr.Mesh3D(
+                        vertex_positions=np.ascontiguousarray(flat_vertex_positions, dtype=np.float64),
+                        triangle_indices=np.ascontiguousarray(flat_triangle_indices, dtype=np.int32),
+                        vertex_colors=np.ascontiguousarray(flat_vertex_colors, dtype=np.uint8),
+                    ),
+                    static=True,
+                )
+                print("✓ Logged option3 hop-distance colormap to /analysis/option3_distance_hops")
+        except Exception as e:
+            print(f"Could not log option3 hop-distance colormap: {e}")
+        
+        finite_distances = face_distance_hops[np.isfinite(face_distance_hops)]
+        if finite_distances.size > 0:
+            print(
+                f"Option3 distance gate: source_faces={len(distance_source_faces)}, "
+                f"max_hops={option3_max_distance_hops}, "
+                f"reachable_faces={len(finite_distances)}, "
+                f"max_reachable_hops={int(np.max(finite_distances))}"
+            )
+        else:
+            print(
+                f"Option3 distance gate: source_faces={len(distance_source_faces)}, "
+                f"max_hops={option3_max_distance_hops}, reachable_faces=0"
+            )
+            
+           
+            
+        # plt.hist(combined_scores, bins=500)
+        # plt.title("Distribution of combined scores (Option 3) - Before masking")
+        # plt.xlabel("combined_score")
+        # plt.ylabel("Frequency")
+        # plt.show()
+        
+        # Mask combined_scores so faces outside allowed set are very unattractive
+        masked_scores = combined_scores.copy()
+        
+        # for idx in range(len(masked_scores)):
+        #     if idx not in allowed_faces:
+        #         masked_scores[idx] = -1e9
+
+        # Separate visualization for masked scores: show allowed and excluded separately
+        # allowed_scores = masked_scores[list(allowed_faces)] if allowed_faces else np.array([])
+        # excluded_scores = masked_scores[[i for i in range(len(masked_scores)) if i not in allowed_faces]]
+        
+        # fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Plot 1: Only allowed faces scores
+        # if len(allowed_scores) > 0:
+        #     axes[0].hist(allowed_scores, bins=100)
+        #     axes[0].set_title("Allowed faces scores (wound_candidates + uncertain)")
+        #     axes[0].set_xlabel("masked_combined_score")
+        #     axes[0].set_ylabel("Frequency")
+        
+        # # Plot 2: Show that excluded faces have -1e9 penalty
+        # axes[1].hist([len(excluded_scores)], bins=1, label=f"Excluded faces: {len(excluded_scores)} @ -1e9")
+        # axes[1].set_title("Masked score distribution summary")
+        # axes[1].set_xlabel("Category")
+        # axes[1].set_ylabel("Count")
+        # axes[1].legend()
+        
+        # plt.tight_layout()
+        # plt.show()
+
+        
+        try:
+            import rerun as rr
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
+                _safe_normalize,
+                _viridis_like_colormap,
+            )
+
+            if self.vertices is not None and self.faces is not None and len(self.faces) > 0:
+                combined_score_colors = _viridis_like_colormap(_safe_normalize(masked_scores))
+                flat_vertex_positions = self.vertices[self.faces].reshape(-1, 3)
+                flat_triangle_indices = np.arange(len(self.faces) * 3, dtype=np.int32).reshape(-1, 3)
+                flat_vertex_colors = np.repeat(combined_score_colors, 3, axis=0)
+
+                rr.log(
+                    "/analysis/option3_masked_score",
+                    rr.Mesh3D(
+                        vertex_positions=np.ascontiguousarray(flat_vertex_positions, dtype=np.float64),
+                        triangle_indices=np.ascontiguousarray(flat_triangle_indices, dtype=np.int32),
+                        vertex_colors=np.ascontiguousarray(flat_vertex_colors, dtype=np.uint8),
+                    ),
+                    static=True,
+                )
+        except Exception as e:
+            print(f"Could not log masked combined score colormap: {e}")
+        # Seed faces: use high r_wound like in Option 2 but constrained to allowed faces
+        seed_faces = set(
+            fi for fi in range(len(self.faces))
+            if float(self.face_objects[fi].r_wound or 0.0) > 0.5 and fi in allowed_faces
+        )
+
+        if not seed_faces:
+            # fall back to wound_candidates as seeds
+            seed_faces = set(wound_candidates) & allowed_faces
+
+        print(f"Option3: seed faces for constrained grow: {len(seed_faces)}")
+
+        grown_faces = set()
+        if seed_faces:
+            grown_faces = self._region_grow_combined_scores(
+                seed_faces=seed_faces,
+                combined_scores=masked_scores,
+                face_distance_hops=face_distance_hops,
+                max_distance_hops=option3_max_distance_hops,
+                max_iterations=20000,
+            )
+            print(f"Option3: constrained region grow expanded to {len(grown_faces)} faces")
+            try:
+                self.log_wound(grown_faces, stage_name="option3_region_grown")
+            except Exception:
+                pass
+        else:
+            print("Option3: no seeds available for constrained grow; grown set empty")
+
+
+
+        # Store for inspection/visualization
+        self.semantic_option3_wound_candidates = wound_candidates
+        self.semantic_option3_periwound_candidates = periwound_candidates
+        self.semantic_option3_uncertain_faces = uncertain_faces
+        self.semantic_option3_grown = grown_faces
+
+        filtered_faces = set(grown_faces)
+        print(f"Option3: final selected faces={len(filtered_faces)} (grown={len(grown_faces)}, uncertain_kept={len(uncertain_faces)})")
+        try:
+            self.log_wound(filtered_faces, stage_name="option3_selected_wound")
+        except Exception:
+            pass
+
         return set(filtered_faces)
 
     def _refine_wound_faces(self,
@@ -2786,45 +3249,44 @@ def main(visualization: bool = False):
             mrf_method="mean_field"
         )
 
-        if visualization:
-            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
-                visualize_wound_assessment_rerun,
-            )
-
-            visualize_wound_assessment_rerun(
-                wound_model,
-                session_name="WoundModel3D_Assessment",
-                spawn=True,
-                image_root=model_path.parent,
-            )
-
+       
       
 
         
-        # Get final wound mesh with mesh-specific filtering
+        # # Get final wound mesh with mesh-specific filtering
         print("\n=== Extracting Wound Mesh ===")
-        wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
+        wound_model.get_wound_mesh( #wound_vertices, wound_faces, wound_colors =
             min_visibility=4,  # Require visibility from multiple cameras
             use_connectivity=True,  # Extract connected components
             min_component_faces=100,  # Minimum size for valid component
             use_closing=True,  # Apply morphological closing
             closing_iterations=5,  # Number of closing iterations
             closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
-            use_fill_holes=False,  # We'll use trimesh instead in correction step
-            hole_size=-1.0
         )
 
-        print("\n=== Measuring Wound Dimensions ===")
-        wound_measurement_result = None
-        try:
-            measurement_module = importlib.import_module(
-                "Pipe_Code.modules.WoundEdgeDetection.3DWound_Measurement_Mesh"
+        if visualization:
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
+                visualize_wound_assessment_rerun,
             )
-            wound_measurement_result = measurement_module.measure_wound_dimensions_from_model(wound_model)
-            print(measurement_module.format_measurement_summary(wound_measurement_result))
-        except Exception as measurement_error:
-            print(f"Warning: wound measurement failed: {measurement_error}")
-            traceback.print_exc()
+
+        visualize_wound_assessment_rerun(
+            wound_model,
+            session_name="WoundModel3D_Assessment",
+            spawn=True,
+            image_root=model_path.parent,
+        )
+
+        # print("\n=== Measuring Wound Dimensions ===")
+        # wound_measurement_result = None
+        # try:
+        #     measurement_module = importlib.import_module(
+        #         "Pipe_Code.modules.WoundEdgeDetection.3DWound_Measurement_Mesh"
+        #     )
+        #     wound_measurement_result = measurement_module.measure_wound_dimensions_from_model(wound_model)
+        #     print(measurement_module.format_measurement_summary(wound_measurement_result))
+        # except Exception as measurement_error:
+        #     print(f"Warning: wound measurement failed: {measurement_error}")
+        #     traceback.print_exc()
 
      
 
