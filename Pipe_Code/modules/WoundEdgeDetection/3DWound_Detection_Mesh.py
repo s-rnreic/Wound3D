@@ -283,10 +283,16 @@ class WoundModel3DMesh:
         self.semantic_posteriors = {}  # face_idx -> np.array([p_periwound, p_wound])
         self.semantic_posteriors_before_mrf = {}  # face_idx -> posteriors before MRF constraints
         self.semantic_class_names = []  # n-class classification
+        self.semantic_log_ratio_values = {}  # face_idx -> log(p_wound / p_periwound)
+        self.semantic_log_ratio_strength_values = {}  # face_idx -> abs(log(p_wound / p_periwound))
+        self.semantic_log_ratio_labels = {}  # face_idx -> wound/periwound/uncertain
+        self.semantic_log_ratio_thresholds = {"wound": 0.35, "periwound": 0.35}
         
 
         # Current filtering result (indices into self.faces)
         self.current_wound_faces = set()  # Current wound face indices after filtering
+        self.current_periwound_faces = set()  # Current periwound face indices after filtering
+        self.periwound_thickness = 2  # Number of adjacency layers used for the periwound shell
         
 
         # Model state
@@ -1748,16 +1754,7 @@ class WoundModel3DMesh:
         self.semantic_log_ratio_values = {}
         self.semantic_log_ratio_strength_values = {}
 
-        # Store per-face results (2-class: periwound=0, wound=1)
-            log_ratio_value = float(log_ratio_values[i])
-            log_ratio_strength = float(log_ratio_strength_values[i])
-        self.semantic_posteriors = {}
-            self.semantic_log_ratio_values[face_idx] = log_ratio_value
-            self.semantic_log_ratio_strength_values[face_idx] = log_ratio_strength
 
-
-                face_obj.posterior_log_ratio = log_ratio_value
-                face_obj.posterior_log_ratio_strength = log_ratio_strength
         for i, face_idx in enumerate(face_indices):
             probs = final_posteriors[i]
             label_name = self.semantic_class_names[int(labels[i])]
@@ -1968,6 +1965,179 @@ class WoundModel3DMesh:
                         stack.append(next_edge)
 
         return n_loops
+
+    def _get_boundary_loop_lengths_in_face_set(self, face_set: Set[int]) -> Tuple[float, List[int]]:
+        """Return total boundary perimeter and boundary vertex indices for a face subset.
+
+        The measure is the total boundary perimeter, computed as the sum of the
+        Euclidean lengths of all boundary edges across all boundary loops.
+        """
+        if not face_set:
+            return 0.0, []
+
+        try:
+            import trimesh
+            import networkx as nx
+
+            face_list = np.array(sorted(face_set), dtype=np.int64)
+            if face_list.size == 0:
+                return 0.0, []
+
+            submesh = trimesh.Trimesh(
+                vertices=self.vertices,
+                faces=self.faces[face_list],
+                process=False,
+                maintain_order=True,
+            )
+
+            edges_unique = np.asarray(submesh.edges_unique, dtype=np.int64)
+            if len(edges_unique) == 0:
+                return 0.0, []
+
+            edges_unique_inverse = np.asarray(submesh.edges_unique_inverse, dtype=np.int64)
+            if edges_unique_inverse.size == 0:
+                return 0.0, []
+
+            edge_use_count = np.bincount(edges_unique_inverse, minlength=len(edges_unique))
+            boundary_edges = edges_unique[edge_use_count == 1]
+            if len(boundary_edges) == 0:
+                return 0.0, []
+
+            graph = nx.Graph()
+            graph.add_edges_from(boundary_edges.tolist())
+
+            loop_lengths = []
+            total_perimeter = 0.0
+            for component_nodes in nx.connected_components(graph):
+                component_graph = graph.subgraph(component_nodes)
+                if component_graph.number_of_edges() > 0:
+                    loop_lengths.append(int(component_graph.number_of_edges()))
+
+            for a, b in boundary_edges:
+                va = np.asarray(self.vertices[int(a)], dtype=np.float64)
+                vb = np.asarray(self.vertices[int(b)], dtype=np.float64)
+                total_perimeter += float(np.linalg.norm(va - vb))
+
+            boundary_vertices = np.unique(boundary_edges.reshape(-1)).astype(np.int64).tolist()
+            return total_perimeter, boundary_vertices
+        except Exception:
+            pass
+
+        edge_count = defaultdict(int)
+        for face_idx in face_set:
+            if face_idx < 0 or face_idx >= len(self.faces):
+                continue
+            v0, v1, v2 = self.faces[face_idx]
+            edges = [
+                (min(v0, v1), max(v0, v1)),
+                (min(v1, v2), max(v1, v2)),
+                (min(v2, v0), max(v2, v0)),
+            ]
+            for edge in edges:
+                edge_count[edge] += 1
+
+        boundary_edges = [edge for edge, count in edge_count.items() if count == 1]
+        if not boundary_edges:
+            return 0.0, []
+
+        vertex_to_edges = defaultdict(list)
+        boundary_vertices = set()
+        total_perimeter = 0.0
+        for edge in boundary_edges:
+            a, b = edge
+            vertex_to_edges[a].append(edge)
+            vertex_to_edges[b].append(edge)
+            boundary_vertices.add(int(a))
+            boundary_vertices.add(int(b))
+            va = np.asarray(self.vertices[int(a)], dtype=np.float64)
+            vb = np.asarray(self.vertices[int(b)], dtype=np.float64)
+            total_perimeter += float(np.linalg.norm(va - vb))
+
+        unvisited = set(boundary_edges)
+
+        while unvisited:
+            stack = [next(iter(unvisited))]
+            while stack:
+                edge = stack.pop()
+                if edge not in unvisited:
+                    continue
+                unvisited.remove(edge)
+                a, b = edge
+                for next_edge in vertex_to_edges[a]:
+                    if next_edge in unvisited:
+                        stack.append(next_edge)
+                for next_edge in vertex_to_edges[b]:
+                    if next_edge in unvisited:
+                        stack.append(next_edge)
+
+        return total_perimeter, sorted(boundary_vertices)
+
+    def _expand_faces_by_boundary_reduction(self,
+                                            face_set: Set[int],
+                                            max_iterations: int = 25) -> Set[int]:
+        """Grow a face set by adding adjacent faces only when the outer boundary shrinks.
+
+        The longest boundary loop is used as the objective when multiple loops are
+        present. Growth stops when no adjacent face reduces that length or when the
+        iteration cap is reached.
+        """
+        filtered_faces = set(face_set)
+        print(f"Starting boundary-guided growth with {len(filtered_faces)} faces")
+        if not filtered_faces:
+            return set()
+
+        current_boundary_perimeter, _boundary_vertices = self._get_boundary_loop_lengths_in_face_set(filtered_faces)
+        if current_boundary_perimeter <= 0:
+            return filtered_faces
+
+        print(
+            f"Boundary-guided growth start: boundary_perimeter={current_boundary_perimeter:.6f}, "
+            f"max_iterations={max_iterations}"
+        )
+        
+        # import rerun as rr
+        # rr.init("Test", spawn=True)
+        for iteration in range(max_iterations):
+            candidate_faces = set()
+            for face_idx in filtered_faces:
+                for adj_face_idx in self.face_adjacency.get(face_idx, []):
+                    if adj_face_idx not in filtered_faces:
+                        candidate_faces.add(adj_face_idx)
+            if not candidate_faces:
+                print(f"Boundary-guided growth stopped at iteration {iteration + 1}: no adjacent faces left")
+                break
+
+            best_candidate = None
+            best_boundary_perimeter = current_boundary_perimeter
+
+            for candidate_face in sorted(candidate_faces):
+                trial_faces = filtered_faces | {candidate_face}
+                trial_boundary_perimeter, _trial_boundary_vertices = self._get_boundary_loop_lengths_in_face_set(trial_faces)
+
+                if trial_boundary_perimeter <= best_boundary_perimeter:
+                    best_candidate = candidate_face
+                    best_boundary_perimeter = trial_boundary_perimeter
+
+            if best_candidate is None:
+                print(
+                    f"Boundary-guided growth stopped at iteration {iteration + 1}: "
+                    f"no adjacent face reduced the boundary perimeter "
+                    f"returning {len(filtered_faces)} faces with boundary_perimeter={current_boundary_perimeter:.6f}"
+                )
+                return filtered_faces
+
+            filtered_faces.add(best_candidate)
+            current_boundary_perimeter = best_boundary_perimeter
+            current_boundary_perimeter, _boundary_vertices = self._get_boundary_loop_lengths_in_face_set(filtered_faces)
+            print(
+                f"Boundary-guided growth iteration {iteration + 1}: added face {best_candidate}, "
+                f"boundary_perimeter={current_boundary_perimeter:.6f}"
+            )
+
+            if current_boundary_perimeter <= 0:
+                break
+
+        return filtered_faces
     
     def extract_submesh_from_faces(self, face_indices: Set[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -2889,7 +3059,8 @@ class WoundModel3DMesh:
                             closing_iterations: int,
                             closing_kernel_size: int,
                             use_probability_validation: bool,
-                            wound_prob_threshold: float) -> Set[int]:
+                            wound_prob_threshold: float,
+                            boundary_growth_max_iterations: int = 25) -> Set[int]:
         """Refine selected wound faces (closing, smoothing, connectivity cleanup)."""
         filtered_faces = set(face_set)
         if not filtered_faces:
@@ -2900,18 +3071,22 @@ class WoundModel3DMesh:
             boundary_loop_count = self._count_boundary_loops_in_face_set(filtered_faces)
             print(f"Boundary loop count before closing: {boundary_loop_count}")
 
-            if boundary_loop_count > 1:
-                filtered_faces = self.morphological_closing(
-                    filtered_faces,
-                    closing_iterations,
-                    closing_kernel_size,
-                    use_probability_validation=use_probability_validation,
-                    wound_prob_threshold=wound_prob_threshold
-                )
-                self.added_faces_closing = set(filtered_faces) - pre_close
-            else:
-                self.added_faces_closing = set()
-                print("Skipping morphological closing (boundary loop count <= 1)")
+    
+            filtered_faces = self.morphological_closing_opening(
+                filtered_faces,
+                operation="closing",
+                geodesic_radius=closing_kernel_size,
+                iterations=closing_iterations,
+            )
+            
+            filtered_faces = self.morphological_closing_opening(
+                filtered_faces,
+                operation="opening",
+                geodesic_radius=closing_kernel_size,
+                iterations=closing_iterations,
+            )
+            self.added_faces_closing = set(filtered_faces) - pre_close
+
         else:
             self.added_faces_closing = set()
 
@@ -2928,7 +3103,11 @@ class WoundModel3DMesh:
             use_probability_validation=use_probability_validation,
             wound_prob_threshold=wound_prob_threshold
         )
-
+        filtered_faces = self._expand_faces_by_boundary_reduction(
+            filtered_faces,
+            max_iterations=boundary_growth_max_iterations,
+        )
+        
         if not filtered_faces:
             print("Warning: No wound faces remain after component extraction")
             return set()
@@ -2937,17 +3116,20 @@ class WoundModel3DMesh:
 
     
     
-    def get_wound_mesh(self, min_visibility: int = 2, 
+    def get_wound_mesh(self,
                       use_connectivity: bool = True,
                       min_component_faces: int = 10,
                       use_closing: bool = True,
                       closing_iterations: int = 1,
                       closing_kernel_size: int = 1,
-                      use_fill_holes: bool = False,
-                      hole_size: float = -1.0,
-                      use_probability_validation: bool = True,
+                      boundary_growth_max_iterations: int = 25,
+                      Use_log_ratio=True,
+                      postrefine_mode: str = "boundary_smoothness",
+                      periwound_thickness: int = 30,
+                      periwound_use_semantic_candidates: bool = True,
+                      use_probability_validation: bool = False,
                       wound_prob_threshold: float = 0.3,
-                      prob_segment_region_grow_ratio: float = 0.8) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Get final wound mesh after all filtering steps.
         
@@ -2971,18 +3153,9 @@ class WoundModel3DMesh:
         if not self.faces_processed:
             raise ValueError("Must process wound segmentation first")
 
+        selected_faces = self._select_wound_faces()
 
-        # Step 1: Selection stage (visibility/probability/segment selection).
-        selected_faces = self._select_wound_faces(
-            min_visibility=min_visibility,
-            use_probability_validation=use_probability_validation,
-            wound_prob_threshold=wound_prob_threshold,
-            prob_segment_region_grow_ratio=prob_segment_region_grow_ratio,
-        )
-
-        if not selected_faces:
-            return np.array([]), np.array([]), np.array([])
-
+        
         # Step 2: Refinement stage (closing, boundary smoothing, connectivity cleanup).
         filtered_faces = self._refine_wound_faces(
             face_set=selected_faces,
