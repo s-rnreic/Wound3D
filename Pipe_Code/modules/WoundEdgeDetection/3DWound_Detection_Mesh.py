@@ -1989,90 +1989,103 @@ class WoundModel3DMesh:
                         self.wound_edge_faces.add(f)
     
 
-    def morphological_closing(self, face_set: Set[int], iterations: int = 1, kernel_size: int = 1,
-                              use_probability_validation: bool = True,
-                              wound_prob_threshold: float = 0.3) -> Set[int]:
-        """
-        Perform morphological closing on wound faces (dilation followed by erosion).
-        
-        Similar to 2D closing, this operation fills small holes and gaps in the wound region
-        by first expanding (dilating) the wound faces to include adjacent non-wound faces,
-        then contracting (eroding) back to remove temporary additions.
-        
-        Args:
-            face_set: Set of face indices to perform closing on
-            iterations: Number of closing iterations
-            kernel_size: Number of adjacency layers to expand in each dilation step (1=immediate neighbors, 2=2 layers, etc.)
-            use_probability_validation: If True, validate added faces using wound probability map
-            wound_prob_threshold: Minimum wound probability for a face to be added during closing
-            
-        Returns:
-            Set of face indices after closing operation
-        """
-        if not self.topology_computed or not face_set:
-            return face_set
-        
-        def _erode_faces(face_ids: Set[int], drop_isolated: bool = False) -> Set[int]:
-            eroded_faces = set()
-            for face_idx in face_ids:
-                adjacent = self.face_adjacency.get(face_idx, [])
-                if drop_isolated and not adjacent:
-                    continue
-                wound_neighbors = sum(1 for adj in adjacent if adj in face_ids)
-                if wound_neighbors >= len(adjacent) / 2:
-                    if not drop_isolated or wound_neighbors > 0:
-                        eroded_faces.add(face_idx)
-            return eroded_faces
-        
-        def _validate_face_probability(face_idx: int, threshold: float) -> bool:
-            """Check if a face passes the wound probability threshold."""
-            if not use_probability_validation:
-                return True
-            return self._get_face_wound_probability(face_idx) >= threshold
+    def morphological_closing_opening(self,
+                                     face_set: Set[int],
+                                     operation: str = "closing",
+                                     geodesic_radius: int = 1,
+                                     iterations: int = 1) -> Set[int]:
+        """Apply geodesic graph morphology to a face subset.
 
-        current_faces = face_set.copy()
+        Closing fills small gaps in the wound region, while opening removes
+        thin spurs and isolated protrusions. The morphology is defined on the
+        face-adjacency graph, with `geodesic_radius` controlling the number of
+        adjacency hops used for the dilation/erosion neighborhood.
+        """
+        if not face_set:
+            return set()
 
-        # Pre-erosion to drop tiny isolated structures before closing.
-        current_faces = _erode_faces(current_faces, drop_isolated=True)
-        
-        validated_additions = 0
-        rejected_additions = 0
-        
-        for iteration in range(iterations):
-            # Dilation: expand by kernel_size layers of adjacent faces
-            dilated = current_faces.copy()
-            expansion_front = current_faces.copy()
-            
-            
-            for layer in range(kernel_size):
-                next_front = set()
-                for face_idx in expansion_front:
-                    adjacent = self.face_adjacency.get(face_idx, [])
-                    for adj_face in adjacent:
-                        if adj_face not in dilated:
-                            # Validate face probability before adding
-                            if _validate_face_probability(adj_face, wound_prob_threshold):
-                                next_front.add(adj_face)
-                                validated_additions += 1
-                            else:
-                                rejected_additions += 1
-                dilated.update(next_front)
-                expansion_front = next_front
-                if not expansion_front:  # No more faces to expand
+        operation = str(operation).lower().strip()
+        geodesic_radius = max(1, int(geodesic_radius))
+        iterations = max(1, int(iterations))
+
+        if operation not in {"closing", "opening", "auto"}:
+            raise ValueError(
+                f"Unsupported morphology operation '{operation}'. "
+                "Expected 'closing', 'opening', or 'auto'."
+            )
+
+        if operation == "auto":
+            return set(face_set)
+
+        def _geodesic_dilate(seed_faces: Set[int], radius: int) -> Set[int]:
+            dilated = set(seed_faces)
+            frontier = set(seed_faces)
+
+            for _ in range(radius):
+                next_frontier: Set[int] = set()
+                for face_idx in frontier:
+                    for adj_face_idx in self.face_adjacency.get(face_idx, []):
+                        if adj_face_idx not in dilated:
+                            next_frontier.add(adj_face_idx)
+                if not next_frontier:
                     break
-            
-            # Erosion: remove faces that don't have enough wound neighbors
-            eroded = _erode_faces(dilated, drop_isolated=False)
-            
-            current_faces = eroded
-        
-        added_faces = current_faces - face_set
-        if added_faces or rejected_additions > 0:
-            print(f"Morphological closing: added {len(added_faces)} faces")
-            if use_probability_validation:
-                print(f"  Probability validation: {validated_additions} validated, {rejected_additions} rejected (threshold={wound_prob_threshold:.2f})")
-        
+                dilated.update(next_frontier)
+                frontier = next_frontier
+
+            return dilated
+
+        def _geodesic_erode(region_faces: Set[int], radius: int) -> Set[int]:
+            if not region_faces:
+                return set()
+
+            eroded_faces: Set[int] = set()
+            for face_idx in region_faces:
+                neighborhood = self._get_face_neighbors_ring(face_idx, radius)
+                if neighborhood.issubset(region_faces):
+                    eroded_faces.add(face_idx)
+            return eroded_faces
+
+        current_faces = set(face_set)
+        for _ in range(iterations):
+            if operation == "closing":
+                current_faces = _geodesic_erode(
+                    _geodesic_dilate(current_faces, geodesic_radius),
+                    geodesic_radius,
+                )
+            else:
+                current_faces = _geodesic_dilate(
+                    _geodesic_erode(current_faces, geodesic_radius),
+                    geodesic_radius,
+                )
+
+            if not current_faces:
+                break
+
         return current_faces
+
+    def morphological_closing(self,
+                              face_set: Set[int],
+                              closing_iterations: int = 1,
+                              closing_kernel_size: int = 1) -> Set[int]:
+        """Compatibility wrapper for geodesic closing on face sets."""
+        return self.morphological_closing_opening(
+            face_set=face_set,
+            operation="closing",
+            geodesic_radius=closing_kernel_size,
+            iterations=closing_iterations,
+        )
+
+    def morphological_opening(self,
+                              face_set: Set[int],
+                              opening_iterations: int = 1,
+                              opening_kernel_size: int = 1) -> Set[int]:
+        """Compatibility wrapper for geodesic opening on face sets."""
+        return self.morphological_closing_opening(
+            face_set=face_set,
+            operation="opening",
+            geodesic_radius=opening_kernel_size,
+            iterations=opening_iterations,
+        )
     
     def expand_and_extract_components(self, face_set: Set[int],
                                      use_connectivity: bool = True,
