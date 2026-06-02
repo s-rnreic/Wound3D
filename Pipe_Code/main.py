@@ -20,6 +20,7 @@ import Pipe_Code.modules.masking.build_masks as masking
 import rerun_viewer
 import time  # Add import for time module
 from Pipe_Code.utils.read_write_model import write_model
+from Pipe_Code.modules.Mesh_postprocessing.MeshSimplification import MeshSimplifier
 import MVS_Meshing as mvs
 from itertools import product
 # user inserts a input_path and a workspace_path
@@ -163,7 +164,7 @@ def DensePostProcessing(workspace_path:str, log_file:str, use_pointcleannet:bool
 
     
     dense_path = Path(workspace_path) / "dense"
-    output_path = dense_path / "processed_pointcloud2.ply"
+    output_path = dense_path / "processed_pointcloud.ply"
     
     _, elapse_time = execute_dense_postprocessing(
         dense_model_path=dense_path,
@@ -182,8 +183,17 @@ def DensePostProcessing(workspace_path:str, log_file:str, use_pointcleannet:bool
     return output_path
 
 def Meshing(workspace_path:str, log_file:str, processed_pointcloud_path: Path)->None:
-    elapse_time= mvs.execute_poisson_meshing(workspace_path, input_ply=str(processed_pointcloud_path))
+    elapse_time = mvs.execute_poisson_meshing(workspace_path, input_ply=str(processed_pointcloud_path))
     log_time(log_file, "Meshing", elapse_time)
+
+    poisson_mesh_path = Path(workspace_path) / "dense" / "poisson.ply"
+    if not poisson_mesh_path.exists():
+        raise FileNotFoundError(f"Created mesh not found: {poisson_mesh_path}")
+
+    simplified_mesh_path = poisson_mesh_path.with_name("poisson_simplified.ply")
+    simplifier = MeshSimplifier(str(poisson_mesh_path))
+    simplifier.run(smooth_iterations=3, decimation_threshold=1.0, min_component_face_count=25)
+    simplifier.save(str(simplified_mesh_path))
 
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
@@ -202,28 +212,28 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=True)
+    # Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=True)
 
-    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    # COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    sparse_path = os.path.join(workspace_path, 'sparse')
-    os.makedirs(sparse_path, exist_ok=True)
-    glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
-    ctgi.create_glomap_ini(glomap_ini_path)
+    # sparse_path = os.path.join(workspace_path, 'sparse')
+    # os.makedirs(sparse_path, exist_ok=True)
+    # glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
+    # ctgi.create_glomap_ini(glomap_ini_path)
 
     # if custom_parameters:
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(glomap_ini_path, header, param, str(value))
 
-    GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
+    # GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
 
-    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    # ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    # cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
     
-    write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    # write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
     
-    MVS(workspace_path, log_file)
+    # MVS(workspace_path, log_file)
     
     processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
     
@@ -261,7 +271,7 @@ def main()->None:
 if __name__ == '__main__':
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
-    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2"
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse"
     #video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
     video_path = r"c:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
     workspace_path = base_workspace_path
