@@ -3073,6 +3073,70 @@ class WoundModel3DMesh:
 
         return set(filtered_faces)
 
+    def log_wound(self, face_indices: Set[int], stage_name: str = "wound_stage"):
+        """Log wound faces to rerun viewer at any stage of the pipeline.
+        
+        Purpose: visualize wound segmentation at any intermediate or final stage.
+        
+        Args:
+            face_indices: Set of face indices to visualize
+            stage_name: Name of the stage (e.g., 'selected', 'filtered', 'final', 'closed')
+                       Will be logged to /analysis/wound_{stage_name}
+        """
+        try:
+            import rerun as rr
+            rr.init("WoundModel3D_Assessment_final", spawn=True)
+            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
+                _safe_normalize,
+                _viridis_like_colormap,
+            )
+            
+            if not face_indices or self.vertices is None or self.faces is None:
+                print(f"log_wound({stage_name}): no faces to log")
+                return
+            
+            print(f"Logging {len(face_indices)} wound faces (stage: {stage_name}) to rerun...")
+            
+            # Create per-face flattened mesh for consistent per-face coloring
+            flat_vertex_positions = self.vertices[self.faces].reshape(-1, 3)
+            flat_triangle_indices = np.arange(len(self.faces) * 3, dtype=np.int32).reshape(-1, 3)
+            
+            # Color non-wound faces gray, wound faces by log-ratio value
+            flat_vertex_colors = np.full((len(self.faces) * 3, 3), 200, dtype=np.uint8)
+            
+            # Get log-ratio values for all faces
+            wound_log_ratio_values = np.array([
+                self._get_face_wound_log_ratio(face_idx) 
+                for face_idx in range(len(self.faces))
+            ], dtype=np.float64)
+            
+            # Normalize and colormap
+            normalized_log_ratio = _safe_normalize(wound_log_ratio_values)
+            face_colors = _viridis_like_colormap(normalized_log_ratio)
+            
+            # Set colors: gray for non-wound, viridis for wound
+            for face_idx in range(len(self.faces)):
+                if face_idx in face_indices:
+                    # Wound face: use viridis colormap
+                    vertex_indices = np.arange(face_idx * 3, face_idx * 3 + 3)
+                    flat_vertex_colors[vertex_indices] = face_colors[face_idx]
+                # else: already gray, leave as is
+            
+            # Log to rerun
+            rr.log(
+                f"/analysis/wound_{stage_name}",
+                rr.Mesh3D(
+                    vertex_positions=np.ascontiguousarray(flat_vertex_positions, dtype=np.float64),
+                    triangle_indices=np.ascontiguousarray(flat_triangle_indices, dtype=np.int32),
+                    vertex_colors=np.ascontiguousarray(flat_vertex_colors, dtype=np.uint8),
+                ),
+                static=True,
+            )
+            print(f"✓ Logged to /analysis/wound_{stage_name}")
+            
+        except Exception as e:
+            print(f"Could not log wound mesh: {e}")
+
     def _refine_wound_faces(self,
                             face_set: Set[int],
                             use_connectivity: bool,
@@ -3126,6 +3190,9 @@ class WoundModel3DMesh:
             use_probability_validation=use_probability_validation,
             wound_prob_threshold=wound_prob_threshold
         )
+
+        self.log_wound(filtered_faces, stage_name="post_closing_and_connectivity")
+        
         filtered_faces = self._expand_faces_by_boundary_reduction(
             filtered_faces,
             max_iterations=boundary_growth_max_iterations,
@@ -3201,20 +3268,125 @@ class WoundModel3DMesh:
             closing_kernel_size=closing_kernel_size,
             use_probability_validation=use_probability_validation,
             wound_prob_threshold=wound_prob_threshold,
+            boundary_growth_max_iterations=boundary_growth_max_iterations,
+        )
+        self.log_wound(filtered_faces, stage_name="refined")
+        
+        self.current_wound_faces = set(filtered_faces)
+        self.periwound_thickness = int(periwound_thickness)
+        periwound_faces = self._segment_periwound_faces(
+            wound_faces=filtered_faces,
+            thickness=periwound_thickness,
+            use_semantic_candidates=periwound_use_semantic_candidates,
+        )
+        self.current_periwound_faces = set(periwound_faces)
+        self.periwound_edge_faces = set(periwound_faces)
+        self.log_wound(periwound_faces, stage_name="periwound_region")
+        self.compute_wound_edge(selected_faces)
+
+        self.fit_periwound_surface(voxel_size=1.0, grid_resolution=64, smoothing=1.0)
+        self.visualize_periwound_surface()
+        print(
+            f"Periwound segmentation complete: {len(periwound_faces)} faces "
+            f"(thickness={self.periwound_thickness}, semantic_support={periwound_use_semantic_candidates})"
         )
 
         if not filtered_faces:
             return np.array([]), np.array([]), np.array([])
         
-        # Extract wound submesh from face indices
+        #Extract wound submesh from face indices
         wound_vertices, wound_faces, wound_colors = self.extract_submesh_from_faces(filtered_faces)
 
-        # Step 4: Fill holes in the mesh (optional)
-        if use_fill_holes and len(wound_vertices) > 0:
-            print("Filling holes in wound mesh...")
-            wound_vertices, wound_faces, wound_colors = self._fill_mesh_holes(
-                wound_vertices, wound_faces, wound_colors, hole_size
+
+    def _segment_periwound_faces(self,
+                                 wound_faces: Set[int],
+                                 thickness: int = 2,
+                                 use_semantic_candidates: bool = True) -> Set[int]:
+        """Build a periwound shell by growing outward from the wound boundary."""
+        if not wound_faces:
+            self.periwound_boundary_normal_reference = None
+            self.periwound_face_normal_reference = None
+            self.periwound_boundary_alignment = None
+            return set()
+
+        thickness = max(0, int(thickness))
+        if thickness == 0:
+            self.periwound_boundary_normal_reference = None
+            self.periwound_face_normal_reference = None
+            self.periwound_boundary_alignment = None
+            return set()
+
+        wound_faces = set(wound_faces)
+        periwound_faces: Set[int] = set()
+        visited_faces = set(wound_faces)
+        frontier = set(wound_faces)
+
+        for _ in range(thickness):
+            next_frontier = set()
+            for face_idx in frontier:
+                for adj_face in self.face_adjacency.get(face_idx, []):
+                    if adj_face in visited_faces:
+                        continue
+                    visited_faces.add(adj_face)
+                    next_frontier.add(adj_face)
+            periwound_faces.update(next_frontier)
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        periwound_faces -= wound_faces
+
+        if use_semantic_candidates:
+            semantic_candidates = set(getattr(self, "semantic_option3_periwound_candidates", set()) or set())
+            if semantic_candidates:
+                shell_support = wound_faces | periwound_faces
+                supported_semantic_faces = {
+                    face_idx
+                    for face_idx in semantic_candidates
+                    if any(adj in shell_support for adj in self.face_adjacency.get(face_idx, []))
+                }
+                periwound_faces.update(supported_semantic_faces - wound_faces)
+
+        boundary_faces = {
+            face_idx
+            for face_idx in wound_faces
+            if any(adj not in wound_faces for adj in self.face_adjacency.get(face_idx, []))
+        }
+        boundary_normals = np.asarray([
+            self.face_objects[idx].face_normal
+            for idx in boundary_faces
+            if 0 <= idx < len(self.face_objects) and self.face_objects[idx].face_normal is not None
+        ], dtype=np.float64)
+        periwound_normals = np.asarray([
+            self.face_objects[idx].face_normal
+            for idx in periwound_faces
+            if 0 <= idx < len(self.face_objects) and self.face_objects[idx].face_normal is not None
+        ], dtype=np.float64)
+
+        self.periwound_boundary_normal_reference = None
+        if boundary_normals.size > 0:
+            self.periwound_boundary_normal_reference = np.median(boundary_normals, axis=0)
+            self.periwound_boundary_normal_reference /= np.linalg.norm(self.periwound_boundary_normal_reference) + 1e-9
+
+        self.periwound_face_normal_reference = None
+        if periwound_normals.size > 0:
+            self.periwound_face_normal_reference = np.median(periwound_normals, axis=0)
+            self.periwound_face_normal_reference /= np.linalg.norm(self.periwound_face_normal_reference) + 1e-9
+
+        self.periwound_boundary_alignment = None
+        if self.periwound_boundary_normal_reference is not None and self.periwound_face_normal_reference is not None:
+            self.periwound_boundary_alignment = float(
+                abs(np.dot(self.periwound_boundary_normal_reference, self.periwound_face_normal_reference))
             )
+
+        return periwound_faces
+
+        # # Step 4: Fill holes in the mesh (optional)
+        # if use_fill_holes and len(wound_vertices) > 0:
+        #     print("Filling holes in wound mesh...")
+        #     wound_vertices, wound_faces, wound_colors = self._fill_mesh_holes(
+        #         wound_vertices, wound_faces, wound_colors, hole_size
+        #     )
 
         print(f"Final wound mesh: {len(wound_vertices)} vertices, {len(wound_faces)} faces")
 
@@ -3314,6 +3486,220 @@ class WoundModel3DMesh:
         print(f"Using n_edges = {n_edges} (10% of longest boundary)")
         
         return n_edges
+
+    def fit_periwound_surface(self,
+                              method: str = "rbf",
+                              voxel_size: Optional[float] = None,
+                              grid_resolution: int = 128,
+                              smoothing: float = 0.0,
+                              spline_degree: int = 3,
+                              return_points: bool = False) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Fit a smooth surface through the current periwound faces and return a mesh or sample points.
+
+        Strategy:
+        - Project periwound face centroids into a fitted local tissue plane (u,v coords).
+        - Fit either an RBF (recommended) or a B-spline-like smooth bivariate surface z(u,v).
+        - Return a dense grid-mesh sampled from the fitted function (vertices, faces) or points.
+
+        Args:
+            method: 'rbf' or 'spline' (falls back to a simple poly fit if SciPy not available)
+            voxel_size: Optional voxel size for aggregating normals/points before fitting.
+            grid_resolution: Grid resolution for sampled output (per axis).
+            smoothing: Regularization/smoothing parameter for spline/rbf where applicable.
+            spline_degree: Degree for bivariate spline when used.
+            return_points: If True, return sampled points instead of a triangulated mesh.
+
+        Returns:
+            (vertices, faces) mesh tuple or (points, None) if return_points=True. Returns None on failure.
+        """
+        # Validate periwound data
+        periwound_faces = getattr(self, "current_periwound_faces", None)
+        if not periwound_faces:
+            print("fit_periwound_surface: no periwound faces available (run get_wound_mesh first)")
+            return None
+
+        # Collect centroids and normals
+        pts = np.asarray([self.face_objects[f].centroid for f in sorted(periwound_faces)], dtype=np.float64)
+        normals = np.asarray([self.face_objects[f].face_normal for f in sorted(periwound_faces) if self.face_objects[f].face_normal is not None], dtype=np.float64)
+        if pts.size == 0:
+            print("fit_periwound_surface: no centroid points available")
+            return None
+
+        # Fit local plane and build local coordinate system
+        plane_normal, plane_d = self._fit_plane(pts, face_normals=normals if normals.size > 0 else None)
+        origin = -plane_d * plane_normal
+        # Create orthonormal basis (u, v, n)
+        n = plane_normal / (np.linalg.norm(plane_normal) + 1e-9)
+        # pick arbitrary vector not parallel to n
+        a = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        if abs(np.dot(a, n)) > 0.9:
+            a = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        u = np.cross(n, a)
+        u /= (np.linalg.norm(u) + 1e-9)
+        v = np.cross(n, u)
+        v /= (np.linalg.norm(v) + 1e-9)
+
+        # Local coordinates (u_coord, v_coord) and heights (z)
+        rel = pts - origin[None, :]
+        uv = np.vstack([rel @ u, rel @ v]).T
+        z = (rel @ n).ravel()
+
+        # Optional voxelization/aggregation of points and normals
+        if voxel_size is not None and voxel_size > 0.0:
+            # voxelize in uv plane
+            vox_idx = np.floor(uv / float(voxel_size)).astype(np.int64)
+            keys = [tuple(k) for k in vox_idx.tolist()]
+            agg = {}
+            for i, k in enumerate(keys):
+                if k not in agg:
+                    agg[k] = {'uv': [], 'z': [], 'n': []}
+                agg[k]['uv'].append(uv[i])
+                agg[k]['z'].append(z[i])
+                if i < len(normals):
+                    agg[k]['n'].append(normals[i])
+
+            uv_list = []
+            z_list = []
+            for k, vdata in agg.items():
+                uv_list.append(np.mean(vdata['uv'], axis=0))
+                z_list.append(np.mean(vdata['z'], axis=0))
+            uv = np.asarray(uv_list, dtype=np.float64)
+            z = np.asarray(z_list, dtype=np.float64)
+
+        # Choose fitting backend: try SciPy RBF / SmoothBivariateSpline
+        fitted = None
+        try:
+            if method == 'rbf':
+                from scipy.interpolate import Rbf
+                rbf = Rbf(uv[:, 0], uv[:, 1], z, function='thin_plate', smooth=float(smoothing))
+                def evaluator(xi, yi):
+                    return rbf(xi, yi)
+                fitted = evaluator
+            elif method == 'spline':
+                from scipy.interpolate import SmoothBivariateSpline
+                s = float(smoothing) if smoothing is not None else 0.0
+                spline = SmoothBivariateSpline(uv[:, 0], uv[:, 1], z, kx=spline_degree, ky=spline_degree, s=s)
+                def evaluator(xi, yi):
+                    return spline.ev(xi, yi)
+                fitted = evaluator
+        except Exception:
+            # SciPy not available or failed -> fallback to quadratic polynomial least-squares
+            A = np.vstack([np.ones(len(uv)), uv[:, 0], uv[:, 1], uv[:, 0] ** 2, uv[:, 0] * uv[:, 1], uv[:, 1] ** 2]).T
+            coeffs, *_ = np.linalg.lstsq(A, z, rcond=None)
+            def evaluator(xi, yi):
+                xi = np.asarray(xi)
+                yi = np.asarray(yi)
+                xi_flat = xi.ravel()
+                yi_flat = yi.ravel()
+                X = np.vstack([np.ones_like(xi_flat), xi_flat, yi_flat, xi_flat ** 2, xi_flat * yi_flat, yi_flat ** 2])
+                zz = (coeffs @ X).reshape(xi.shape)
+                return zz
+            fitted = evaluator
+
+        # Build grid in uv space covering data (with small padding)
+        pad_u = max(1e-3, (uv[:, 0].max() - uv[:, 0].min()) * 0.05)
+        pad_v = max(1e-3, (uv[:, 1].max() - uv[:, 1].min()) * 0.05)
+        u_min, u_max = uv[:, 0].min() - pad_u, uv[:, 0].max() + pad_u
+        v_min, v_max = uv[:, 1].min() - pad_v, uv[:, 1].max() + pad_v
+
+        gx = np.linspace(u_min, u_max, int(max(3, grid_resolution)))
+        gy = np.linspace(v_min, v_max, int(max(3, grid_resolution)))
+        GX, GY = np.meshgrid(gx, gy)
+        GZ = fitted(GX, GY)
+
+        # Convert grid back to 3D points
+        flat_uvx = GX.ravel()
+        flat_uvy = GY.ravel()
+        flat_z = GZ.ravel()
+        vert_xyz = origin[None, :] + np.outer(flat_uvx, u) + np.outer(flat_uvy, v) + np.outer(flat_z, n)
+
+        if return_points:
+            self.periwound_surface_points = vert_xyz.reshape(-1, 3)
+            return self.periwound_surface_points, None
+
+        # Build faces from grid quads
+        nx = len(gx)
+        ny = len(gy)
+        verts = vert_xyz.reshape(ny * nx, 3)
+        faces_idx = []
+        for iy in range(ny - 1):
+            for ix in range(nx - 1):
+                a = iy * nx + ix
+                b = a + 1
+                c = a + nx
+                d = c + 1
+                faces_idx.append([a, b, c])
+                faces_idx.append([b, d, c])
+
+        faces_idx = np.asarray(faces_idx, dtype=np.int32)
+        self.periwound_surface_mesh = (verts, faces_idx)
+        return verts, faces_idx
+
+    def visualize_periwound_surface(self,
+                                     session_path: str = "/analysis/periwound_surface",
+                                     spawn: bool = True,
+                                     color: Tuple[int, int, int] = (220, 120, 40)) -> None:
+        """
+        Visualize the last fitted periwound surface in rerun.
+
+        Uses `self.periwound_surface_mesh` if available, otherwise falls back to
+        `self.periwound_surface_points`. The helper calls `rr.init()` and logs
+        the mesh or points to the supplied `session_path`.
+        """
+        try:
+            import rerun as rr
+        except Exception as e:
+            print(f"visualize_periwound_surface: rerun unavailable: {e}")
+            return
+
+        try:
+            rr.init("WoundModel3D_Assessment_final", spawn=spawn)
+
+            if hasattr(self, "periwound_surface_mesh") and self.periwound_surface_mesh is not None:
+                verts, faces = self.periwound_surface_mesh
+                if verts is None or faces is None or len(verts) == 0 or len(faces) == 0:
+                    print("visualize_periwound_surface: fitted mesh empty")
+                    return
+
+                rr.log(
+                    session_path,
+                    rr.Mesh3D(
+                        vertex_positions=np.ascontiguousarray(verts, dtype=np.float64),
+                        triangle_indices=np.ascontiguousarray(faces, dtype=np.int32),
+                        vertex_colors=np.ascontiguousarray(np.tile(np.array(color, dtype=np.uint8)[None, :], (len(verts), 1)), dtype=np.uint8),
+                    ),
+                    static=True,
+                )
+                print(f"Logged periwound surface mesh to {session_path}")
+                return
+
+            if hasattr(self, "periwound_surface_points") and self.periwound_surface_points is not None:
+                pts = self.periwound_surface_points
+                if pts is None or len(pts) == 0:
+                    print("visualize_periwound_surface: no periwound surface points to log")
+                    return
+
+                try:
+                    rr.log(
+                        session_path,
+                        rr.Points3D(
+                            positions=np.ascontiguousarray(pts, dtype=np.float64),
+                            radii=np.full(len(pts), 0.5, dtype=np.float32),
+                            colors=np.ascontiguousarray(np.tile(np.array(color, dtype=np.uint8)[None, :], (len(pts), 1)), dtype=np.uint8),
+                        ),
+                        static=True,
+                    )
+                    print(f"Logged periwound surface points to {session_path}")
+                    return
+                except Exception:
+                    # Fallback: log as a small mesh (each point as a tiny triangle is expensive)
+                    print("visualize_periwound_surface: Points3D logging failed, ensure rerun supports Points3D")
+
+            print("visualize_periwound_surface: no fitted surface available to visualize")
+
+        except Exception as exc:
+            print(f"visualize_periwound_surface: failed to log: {exc}")
     
     def _fill_mesh_holes(self, vertices: np.ndarray, faces: np.ndarray, 
                         colors: np.ndarray = None, hole_size: float = -1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
