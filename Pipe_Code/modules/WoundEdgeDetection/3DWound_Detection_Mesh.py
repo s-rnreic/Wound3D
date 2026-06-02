@@ -1607,6 +1607,7 @@ class WoundModel3DMesh:
                                             posteriors: np.ndarray,
                                             method: str = "entropy") -> np.ndarray:
         """Compute confidence from posteriors."""
+        # Purpose: map class posterior distributions to a single reliability score per face.
         if method == "max":
             return np.max(posteriors, axis=1)
         # Entropy-based confidence
@@ -1667,6 +1668,10 @@ class WoundModel3DMesh:
             color_space: Color space to use: "none", "rgb", "lab_b", or "ydrdb".
             undistorted_mask_dir: Unused in 2-class mode (kept for API compatibility).
         """
+        # Purpose: execute the full semantic pipeline from features -> probabilistic labels -> per-face state.
+        # Goal 1: infer per-face periwound/wound probabilities from geometric + photometric features.
+        # Goal 2: derive log-ratio evidence and uncertainty bands for downstream decision making.
+        # Goal 3: log interpretable rerun meshes so confidence and uncertainty can be inspected visually.
         
 
 
@@ -1792,6 +1797,7 @@ class WoundModel3DMesh:
         Args:
             face_idx: Face index in self.faces
         """
+        # Purpose: summarize local color appearance for periwound boundary faces.
         if face_idx not in self.periwound_edge_faces:
             return
         
@@ -1829,6 +1835,7 @@ class WoundModel3DMesh:
         Returns:
             List of connected components (each is a set of **global** face indices)
         """
+        # Purpose: split a face subset into topology-connected regions and discard tiny fragments.
         import open3d as o3d
 
         if not face_set:
@@ -1868,6 +1875,7 @@ class WoundModel3DMesh:
 
     def _get_boundary_faces(self) -> Set[int]:
         """Get faces on the mesh boundary (edges with only one adjacent face)."""
+        # Purpose: identify outer-boundary faces used by flooding and accessibility checks.
         boundary_faces = set()
         for edge, face_list in self.edge_adjacency.items():
             if len(face_list) == 1:
@@ -1885,6 +1893,7 @@ class WoundModel3DMesh:
 
         Falls back to edge-component counting if trimesh/networkx are unavailable.
         """
+        # Purpose: estimate region topology complexity (holes/loops) before morphology operations.
         if not face_set:
             return 0
 
@@ -2161,6 +2170,7 @@ class WoundModel3DMesh:
             - faces: (M, 3) array of face indices (0-indexed into returned vertices)
             - colors: (N, 3) array of vertex colors (or None if not available)
         """
+        # Purpose: convert selected global face IDs into a compact standalone mesh.
         if not face_indices:
             return np.array([]), np.array([]), None
         
@@ -2189,6 +2199,7 @@ class WoundModel3DMesh:
 
     def compute_wound_edge(self, wound_faces: Set[int]) -> None:
         """Compute wound edge edges and vertices from wound/non-wound boundary."""
+        # Purpose: capture the geometric wound contour as boundary edges for later measurement/visualization.
         self.wound_edge_edges = []
         self.wound_edge_vertices = set()
         self.wound_edge_faces = set()
@@ -2329,6 +2340,7 @@ class WoundModel3DMesh:
         Returns:
             Set of final face indices including enclosed faces
         """
+        # Purpose: recover enclosed wound regions and keep only valid connected structures.
         if not face_set:
             return face_set
         
@@ -2411,6 +2423,7 @@ class WoundModel3DMesh:
 
     def _get_face_wound_probability(self, face_idx: int) -> float:
         """Return wound probability for a face with graceful fallbacks."""
+        # Purpose: provide a robust wound probability accessor across multiple storage paths.
         if 0 <= face_idx < len(self.face_objects):
             wound_prob = self.face_objects[face_idx].wound_prob
             if wound_prob is not None:
@@ -2457,6 +2470,7 @@ class WoundModel3DMesh:
             wound_r_values: wound r-value per face
             wound_prob_values: wound posterior/confidence proxy per face
         """
+        # Purpose: build vectorized per-face arrays to speed selection and filtering.
         n_faces = len(self.face_objects)
         n_views = max(len(self.spectators), 1)
 
@@ -2494,6 +2508,7 @@ class WoundModel3DMesh:
 
     def _extract_components_in_face_set(self, face_set: Set[int]) -> List[Set[int]]:
         """Extract connected components from a face subset using face adjacency."""
+        # Purpose: lightweight BFS component extraction without external dependencies.
         if not face_set:
             return []
 
@@ -2523,6 +2538,7 @@ class WoundModel3DMesh:
 
     def _compute_probability_wound_segments(self, wound_prob_threshold: float) -> List[Set[int]]:
         """Compute connected wound segments from the wound probability map."""
+        # Purpose: derive contiguous high-probability wound candidates for segment-level filtering.
         if not getattr(self, "semantic_mrf_posteriors", None) and not self.semantic_posteriors:
             return []
 
@@ -2535,6 +2551,7 @@ class WoundModel3DMesh:
 
     def _is_component_accessible_from_boundary(self, component_faces: Set[int]) -> bool:
         """Check whether any face in a component touches the outer mesh boundary."""
+        # Purpose: detect enclosed/internal components that may need special handling.
         if not component_faces:
             return False
         boundary_faces = self._get_boundary_faces()
@@ -2542,6 +2559,7 @@ class WoundModel3DMesh:
 
     def _region_grow_within_segment(self, seed_faces: Set[int], segment_faces: Set[int]) -> Set[int]:
         """Region-grow from seed faces while staying inside a target segment."""
+        # Purpose: expand trusted seeds within a constrained probability segment.
         if not seed_faces or not segment_faces:
             return set()
 
@@ -2568,6 +2586,7 @@ class WoundModel3DMesh:
                                     probability_segments: List[Set[int]],
                                     initial_projected_faces: Set[int]) -> Set[int]:
         """Select probability segment with maximal overlap to initial wound projection."""
+        # Purpose: choose the most plausible wound segment by overlap and size.
         if not probability_segments:
             return set()
 
@@ -3065,6 +3084,7 @@ class WoundModel3DMesh:
                             wound_prob_threshold: float,
                             boundary_growth_max_iterations: int = 25) -> Set[int]:
         """Refine selected wound faces (closing, smoothing, connectivity cleanup)."""
+                    # Purpose: convert coarse wound candidates into a geometrically coherent final region.
         filtered_faces = set(face_set)
         if not filtered_faces:
             return set()
@@ -3145,14 +3165,26 @@ class WoundModel3DMesh:
             closing_kernel_size: Number of adjacency layers to expand per iteration (1=neighbors, 2=2 layers, etc.)
             use_fill_holes: Whether to fill holes in the mesh using trimesh
             hole_size: Maximum hole size to fill (-1.0 for all holes)
+            segmentation_tags: Optional tags that select the segmentation method.
+                Use {'log_ratio_band'} or {'ratio_band'} for the new three-way log-ratio mode.
+            wound_log_ratio_threshold: Lower bound for the wound class in log-ratio mode.
+            periwound_log_ratio_threshold: Lower bound for the periwound class in log-ratio mode.
             use_probability_validation: If True, validate added faces using wound probability map
             wound_prob_threshold: Minimum wound probability for faces added during closing/expansion
+            use_posterior_ratio_validation: If True, also validate faces using log(p_wound / p_periwound)
+            posterior_ratio_threshold: Minimum absolute log-ratio required for wound selection
             prob_segment_region_grow_ratio: If a selected probability segment is not boundary-accessible
                 and initial coverage ratio is below this value, grow/select the full segment
+            periwound_thickness: Number of adjacency layers to include around the final wound region.
+            periwound_use_semantic_candidates: If True, use semantic periwound candidates as soft support.
             
         Returns:
             Tuple of (wound_vertices, wound_faces, wound_colors)
         """
+        # Purpose: orchestrate wound-face selection/refinement and return an extractable wound submesh.
+        # Goal 1: choose a segmentation strategy (standard evidence filters or log-ratio band mode).
+        # Goal 2: apply confidence-aware thresholds that preserve likely wound tissue.
+        # Goal 3: prepare face sets for refinement/submesh extraction in downstream steps.
         if not self.faces_processed:
             raise ValueError("Must process wound segmentation first")
 
@@ -3206,6 +3238,7 @@ class WoundModel3DMesh:
         Returns:
             n_edges value (at least 10)
         """
+        # Purpose: estimate a stable hole-filling edge parameter from boundary complexity.
         # Build edge adjacency for this submesh
         edge_count = defaultdict(int)
         for face in faces:
