@@ -3297,7 +3297,23 @@ class WoundModel3DMesh:
         #Extract wound submesh from face indices
         wound_vertices, wound_faces, wound_colors = self.extract_submesh_from_faces(filtered_faces)
 
+        # Step 4: Fill holes in the mesh (optional)
+        if len(wound_vertices) > 0:
+            print("Filling holes in wound mesh...")
+            wound_vertices, wound_faces, wound_colors = self._fill_mesh_holes(
+                wound_vertices, wound_faces, wound_colors
+            )
 
+        print(f"Final wound mesh: {len(wound_vertices)} vertices, {len(wound_faces)} faces")
+        
+        # Update global tracking with face indices in self.faces
+        self.current_wound_faces = filtered_faces
+
+        # Compute wound edge boundary
+        self.compute_wound_edge(filtered_faces)
+
+        return wound_vertices, wound_faces, wound_colors
+        
     def _segment_periwound_faces(self,
                                  wound_faces: Set[int],
                                  thickness: int = 2,
@@ -3381,22 +3397,7 @@ class WoundModel3DMesh:
 
         return periwound_faces
 
-        # # Step 4: Fill holes in the mesh (optional)
-        # if use_fill_holes and len(wound_vertices) > 0:
-        #     print("Filling holes in wound mesh...")
-        #     wound_vertices, wound_faces, wound_colors = self._fill_mesh_holes(
-        #         wound_vertices, wound_faces, wound_colors, hole_size
-        #     )
-
-        print(f"Final wound mesh: {len(wound_vertices)} vertices, {len(wound_faces)} faces")
-
-        # Update global tracking with face indices in self.faces
-        self.current_wound_faces = filtered_faces
-
-        # Compute wound edge boundary
-        self.compute_wound_edge(filtered_faces)
-
-        return wound_vertices, wound_faces, wound_colors
+        
     
     def _compute_boundary_n_edges(self, vertices: np.ndarray, faces: np.ndarray) -> int:
         """
