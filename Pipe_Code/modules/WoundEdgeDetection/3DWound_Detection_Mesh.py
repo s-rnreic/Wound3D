@@ -67,6 +67,8 @@ class Faces:
     r_tissue: Optional[float] = None
     wound_prob: Optional[float] = None
     periwound_prob: Optional[float] = None
+    posterior_log_ratio: Optional[float] = None
+    posterior_log_ratio_strength: Optional[float] = None
     label: Optional[str] = None
     confidence: Optional[float] = None
 
@@ -307,6 +309,7 @@ class WoundModel3DMesh:
         self._trimesh_cache = None
         self._feature_mean = None
         self._feature_std = None
+        self._face_distance_cache = {}
         
         # --- DEBUG_VIZ (safe to delete) ---
         # Stores debug-only semantic selection/visualization state.
