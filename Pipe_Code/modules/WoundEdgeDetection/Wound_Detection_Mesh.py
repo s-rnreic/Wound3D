@@ -3785,16 +3785,19 @@ class WoundModel3DMesh:
             print("Open3D not available for mesh export")
 
 
-def main(visualization: bool = False):
+def main(workspace_path: str, simplified_mesh_path: Path=None, visualization: bool = True):
     """
     Example usage of mesh-based wound detection with periwound detection.
     """
     
     # Example paths (adjust to your data)
-    mesh_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\poisson_smoothed.ply")
-    model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense")
-    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_wound_only_undistorted")
-    extruded_mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse\dense\masks_extruded_wound_only_undistorted")
+    if simplified_mesh_path is None:
+        mesh_path = Path(workspace_path) / "dense" / "poisson_simplified.ply"
+    else:
+        mesh_path = simplified_mesh_path  # Path to the simplified mesh (PLY/OBJ) generated from COLMAP dense reconstruction
+    model_path = Path(workspace_path) / "dense"
+    mask_dir = Path(workspace_path) / "dense" / "masks_wound_only_undistorted"
+    extruded_mask_dir = Path(workspace_path) / "dense" / "masks_extruded_wound_only_undistorted"
 
     try:
         # Initialize model
@@ -3851,8 +3854,7 @@ def main(visualization: bool = False):
         
         # # Get final wound mesh with mesh-specific filtering
         print("\n=== Extracting Wound Mesh ===")
-        wound_model.get_wound_mesh( #wound_vertices, wound_faces, wound_colors =
-            min_visibility=4,  # Require visibility from multiple cameras
+        wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh( #wound_vertices, wound_faces, wound_colors =
             use_connectivity=True,  # Extract connected components
             min_component_faces=100,  # Minimum size for valid component
             use_closing=True,  # Apply morphological closing
@@ -3872,24 +3874,25 @@ def main(visualization: bool = False):
             image_root=model_path.parent,
         )
 
-        # print("\n=== Measuring Wound Dimensions ===")
-        # wound_measurement_result = None
-        # try:
-        #     measurement_module = importlib.import_module(
-        #         "Pipe_Code.modules.WoundEdgeDetection.3DWound_Measurement_Mesh"
-        #     )
-        #     wound_measurement_result = measurement_module.measure_wound_dimensions_from_model(wound_model)
-        #     print(measurement_module.format_measurement_summary(wound_measurement_result))
-        # except Exception as measurement_error:
-        #     print(f"Warning: wound measurement failed: {measurement_error}")
-        #     traceback.print_exc()
+        print("\n=== Measuring Wound Dimensions ===")
+        wound_measurement_result = None
+        try:
+            measurement_module = importlib.import_module(
+                "Pipe_Code.modules.WoundEdgeDetection.Wound_Measurement_Mesh"
+            )
+            wound_measurement_result = measurement_module.measure_wound_dimensions_from_model(wound_model, visualization=True)
+            print(measurement_module.format_measurement_summary(wound_measurement_result))
+        except Exception as measurement_error:
+            print(f"Warning: wound measurement failed: {measurement_error}")
+            traceback.print_exc()
 
      
 
         # Save the initial wound mesh
-        # print("\n=== Saving Meshes ===")
-        # wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
-        # print(f"Saved initial wound mesh to: {output_path}")
+        print("\n=== Saving Meshes ===")
+        output_path = Path(model_path) / "wound_mesh.ply"
+        wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
+        print(f"Saved initial wound mesh to: {output_path}")
         
         print("\n=== Processing Complete ===")
         

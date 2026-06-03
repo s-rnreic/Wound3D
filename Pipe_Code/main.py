@@ -194,6 +194,16 @@ def Meshing(workspace_path:str, log_file:str, processed_pointcloud_path: Path)->
     simplifier = MeshSimplifier(str(poisson_mesh_path))
     simplifier.run(smooth_iterations=3, decimation_threshold=1.0, min_component_face_count=25)
     simplifier.save(str(simplified_mesh_path))
+    
+    return simplified_mesh_path
+
+def Segmentation3D(workspace_path:str, log_file:str, simplified_mesh_path: Path=None)->None:
+    from Pipe_Code.modules.WoundEdgeDetection.Wound_Detection_Mesh import main as execute_segmentation
+    
+    elapse_time = execute_segmentation(workspace_path, simplified_mesh_path)
+    log_time(log_file, "3DSegmentation", elapse_time)
+    
+    return
 
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
@@ -235,10 +245,11 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     
     # MVS(workspace_path, log_file)
     
-    processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
+    # processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
     
-    Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
+    # simplified_mesh_path = Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
     
+    Segmentation3D(workspace_path, log_file)
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
     # print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")

@@ -396,7 +396,7 @@ def _estimate_per_approach_uncertainty(
 	}
 
 
-def measure_wound_dimensions_from_model(wound_model: Any) -> WoundMeasurementResult:
+def measure_wound_dimensions_from_model(wound_model: Any, visualization: bool = False) -> WoundMeasurementResult:
 	"""Compute wound dimensions using multiple geometric approaches."""
 	if getattr(wound_model, "vertices", None) is None or getattr(wound_model, "faces", None) is None:
 		raise ValueError("Model geometry is not loaded")
@@ -438,6 +438,10 @@ def measure_wound_dimensions_from_model(wound_model: Any) -> WoundMeasurementRes
 		uncertainty_estimation=uncertainty,
 	)
 
+	if visualization:
+		print(format_measurement_summary(result))
+		visualize_wound_measurements_rerun(wound_model, result)
+ 
 	# Persist on model for downstream access/debugging.
 	wound_model.wound_measurement_result = result.to_dict()
 	return result
