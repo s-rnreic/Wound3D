@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
 import os
@@ -6,6 +8,11 @@ import matplotlib.pyplot as plt
 import torch
 import sys
 import importlib.util
+
+# Add local module paths for sibling imports
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
 
 # Add SAM2 path to sys.path for potential imports
 sam2_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external', 'sam2')
@@ -269,7 +276,7 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=True, use_mask_adjustment=False, extrude_masks=False, 
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=False, Use_WoundAmbit=True, use_mask_adjustment=False, extrude_masks=False, 
                    min_mask_ratio=0.1, max_mask_ratio=0.8, neighbors_count=3):
     """
     Process a folder of images to generate segmentation masks.
@@ -374,6 +381,7 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             from deepskin_wrapper import wound_segmentation
             print("DeepSkin installed successfully.")
         
+  
         folder_path = input_folder
         output_path = output_folder
         # Create output directories for mask channels
@@ -408,64 +416,182 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             
             # Save wound+tissue combined mask
             cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
+    
+    elif Use_WoundAmbit:
+        import subprocess
+        import shutil
+        import stat
         
-        # Apply mask adjustment if requested
-        if use_mask_adjustment:
-            print("\n" + "="*60)
-            print("Applying Mask Adjustment Workflow")
-            print("="*60)
+        from deepskin import wound_segmentation as _original_wound_segmentation
+            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
+        from deepskin_wrapper import wound_segmentation
+        print("DeepSkin module found.")
+        
+        wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_wound_only')
+        wound_tissue_folder = output_folder  # wound + tissue combined
+        os.makedirs(wound_only_folder, exist_ok=True)
+        os.makedirs(wound_tissue_folder, exist_ok=True)
+        
+        for img_name in os.listdir(input_folder):
+            img_path = os.path.join(input_folder, img_name)
+            bgr = cv2.imread(img_path)
+            if bgr is None:
+                print(f"Failed to read image: {img_name}")
+                continue
+
+            # Convert the image from BGR to RGB format
+            rgb = bgr[..., ::-1]
+
+            # Get the wound segmentation mask
+            wound_mask = wound_segmentation(img=rgb)
+
+            # Split the mask into channels (background, tissue, wound)
+            wound_channel = wound_mask[:, :, 0]
+            tissue_channel = wound_mask[:, :, 1]
+            background_channel = wound_mask[:, :, 2]
+
+            # Create combined wound+tissue mask
+            combined_mask = np.bitwise_or(wound_channel, tissue_channel)
             
-            # Import MaskAdjustment
-            from MaskAdjustment import MaskAdjustment
+            # Save wound+tissue combined mask
+            cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
+        
+        
+        # Convert Windows paths to WSL paths for the command
+        def win_to_wsl_path(win_path):
+            """Convert a Windows path to a WSL-compatible path (/mnt/c/...)"""
+            # Normalize backslashes and handle drive letters
+            win_path = os.path.normpath(win_path)
+            drive_letter = win_path[0].lower()
+            rest = win_path[3:]  # Skip "C:\" or similar
+            # Replace backslashes with forward slashes
+            rest = rest.replace('\\', '/')
+            return f"/mnt/{drive_letter}/{rest}"
+        
+        input_folder_wsl = win_to_wsl_path(input_folder)
+        output_folder_full = wound_only_folder  # The output folder for masks (wound+tissue)
+        output_folder_wsl = win_to_wsl_path(output_folder_full)
+        
+        woundambit_available = False
+        
+        # Check if WoundAmbit conda environment exists
+        env_check_cmd = "source ~/anaconda3/etc/profile.d/conda.sh && conda env list | grep woundambit"
+        env_check_result = subprocess.run(
+            ["wsl", "bash", "-lc", env_check_cmd],
+            capture_output=True,
+            text=True,
+            shell=False
+        )
+        
+        woundambit_available = ("woundambit" in env_check_result.stdout or "woundambit" in env_check_result.stderr)
+        
+        if not woundambit_available:
+            print("WARNING: WoundAmbit conda environment 'woundambit' not found.")
+        else:
+            print(f"WoundAmbit environment found. Running WoundAmbit inference...")
+            print(f"  Input folder (WSL):  {input_folder_wsl}")
+            print(f"  Output folder (WSL): {output_folder_wsl}")
             
-            # Apply to wound+tissue masks
-            print("\nAdjusting wound+tissue masks...")
-            mask_adjuster = MaskAdjustment(
-                folder_path, 
-                wound_tissue_folder, 
-                wound_tissue_folder,  # Output to same folder
-                min_mask_ratio=min_mask_ratio,
-                max_mask_ratio=max_mask_ratio,
-                neighbors_count=neighbors_count
+            # Escape single quotes in paths for the shell command
+            input_escaped = input_folder_wsl.replace("'", "'\\''")
+            output_escaped = output_folder_wsl.replace("'", "'\\''")
+            
+            cmd = f"""
+            set -e
+            cd /mnt/c/Users/Reich/LocalCoding/COLMAP_Pipline/Pipe_Code/modules/masking/utils/
+            source ~/anaconda3/etc/profile.d/conda.sh
+            conda activate woundambit
+            python WoundAmbitWrapper.py --input_folder '{input_escaped}' --output_folder '{output_escaped}'
+            """
+
+            result = subprocess.run(
+                ["wsl", "bash", "-lc", cmd],
+                capture_output=True,
+                text=True,
             )
-            
-            # Preprocess masks
-            mask_adjuster.perform_preprocessing(min_solidity=0.7)
-            
-            # Adjust small masks
-            mask_adjuster.simple_small_mask_adjustment()
-            
-            # Evaluate and adjust invalid masks
-            mask_adjuster.evaluate_masks(visualize=False)
-            mask_adjuster.adjust_masks(save_adjusted=False)
-            
-            # Save adjusted masks
-            mask_adjuster._save_all_masks()
-           
-        if extrude_masks:
-            from ExtendWoundMask import create_extended_wound_masks
-            print("Extruding masks...")
-            extruded_wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_extruded_wound_only')
-            os.makedirs(extruded_wound_only_folder, exist_ok=True)
-            stats = create_extended_wound_masks(
-                wound_only_folder,
-                wound_tissue_folder,
-                extruded_wound_only_folder,
-                extension_percentage=1.0,  # 70% extension
-                visualize_samples=0  # Visualize first 3 samples
-            )
 
-            
-        print("Mask adjustment complete!")
+            for old_name in os.listdir(output_folder_full):
+                print("renaming masks...")
+                base_name = os.path.splitext(old_name)[0]
+                new_img_name = base_name + ".jpg.png"
+                old_path = os.path.join(output_folder_full, old_name)
+                new_path = os.path.join(wound_only_folder, new_img_name)
+                cv2.imwrite(new_path, cv2.imread(old_path))
+                os.remove(old_path)
+            print("Return code:", result.returncode)
+            print("--- STDOUT ---")
+            print(result.stdout)
+            print("--- STDERR ---")
+            print(result.stderr)
 
+            if result.returncode != 0:
+                print(f"WARNING: WoundAmbit inference failed with return code {result.returncode}.")
+                woundambit_available = False
 
-
-    else:
+        if not woundambit_available:
+            print("Falling back to conservative (LAB-based) segmentation.")
+            Use_WoundAmbit = False
+    # Apply mask adjustment if requested
+    
+    # If WoundAmbit failed or was unavailable, use the conservative (LAB-based) fallback
+    if not Use_WoundAmbit and not Use_SAM2 and not Use_DeepSkin:
+        print("\n" + "="*60)
+        print("Running Conservative (LAB-based) Segmentation")
+        print("="*60)
         os.makedirs(output_folder, exist_ok=True)
         image_paths = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
         
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             executor.map(process_image, image_paths, [output_folder] * len(image_paths))
+        print(f"Conservative segmentation complete. Masks saved to: {output_folder}")
+    
+    if use_mask_adjustment:
+        print("\n" + "="*60)
+        print("Applying Mask Adjustment Workflow")
+        print("="*60)
+        
+        # Import MaskAdjustment
+        from MaskAdjustment import MaskAdjustment
+        
+        # Apply to wound+tissue masks
+        print("\nAdjusting wound+tissue masks...")
+        mask_adjuster = MaskAdjustment(
+            folder_path, 
+            wound_tissue_folder, 
+            wound_tissue_folder,  # Output to same folder
+            min_mask_ratio=min_mask_ratio,
+            max_mask_ratio=max_mask_ratio,
+            neighbors_count=neighbors_count
+        )
+        
+        # Preprocess masks
+        mask_adjuster.perform_preprocessing(min_solidity=0.7)
+        
+        # Adjust small masks
+        mask_adjuster.simple_small_mask_adjustment()
+        
+        # Evaluate and adjust invalid masks
+        mask_adjuster.evaluate_masks(visualize=False)
+        mask_adjuster.adjust_masks(save_adjusted=False)
+        
+        # Save adjusted masks
+        mask_adjuster._save_all_masks()
+           
+    if extrude_masks:
+        from ExtendWoundMask import create_extended_wound_masks
+        print("Extruding masks...")
+        extruded_wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_extruded_wound_only')
+        os.makedirs(extruded_wound_only_folder, exist_ok=True)
+        stats = create_extended_wound_masks(
+            wound_only_folder,
+            wound_tissue_folder,
+            extruded_wound_only_folder,
+            extension_percentage=1.0,  # 70% extension
+            visualize_samples=0  # Visualize first 3 samples
+        )
+
+            
+        print("Mask adjustment complete!")
 
 
 
@@ -641,20 +767,22 @@ if __name__ == '__main__':
     USE_SAM2 = False
     USE_DEEPSKIN = True
     
-    checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
-    config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2\sharp_images"
-    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test2\masks"
+    # checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
+    # config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
+    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Test1\sharp_images"
+    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Test1\masks"
 
 
-    #Masking with SAM2
-    if USE_SAM2:
-        result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=False)
-        save_masks(result, output_path)
+    # #Masking with SAM2
+    # if USE_SAM2:
+    #     result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=False)
+    #     save_masks(result, output_path)
 
     #Masking with DeepSkin
     if USE_DEEPSKIN:
-        process_folder(img_folder_path, output_path, Use_DeepSkin=True, use_mask_adjustment=True)
+        process_folder(img_folder_path, output_path, Use_DeepSkin=True, use_mask_adjustment=False, Use_WoundAmbit=False)
     else:
         process_folder(img_folder_path, output_path, Use_SAM2=USE_SAM2, Use_DeepSkin=USE_DEEPSKIN)
     #crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")
+    # Example: Rename all mask files in a folder to .jpg format
+    output_folder_full = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein4\masks_wound_only")

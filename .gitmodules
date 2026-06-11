@@ -1,7 +1,9 @@
-
 [submodule "external/sam2"]
 	path = external/sam2
 	url = https://github.com/facebookresearch/sam2.git
 [submodule "external/PointCleanNet"]
 	path = external/PointCleanNet
 	url = https://github.com/mrakotosaon/pointcleannet.git
+[submodule "external/WoundAmbit"]
+	path = external/WoundAmbit
+	url = https://github.com/s-rnreic/woundambit.git
