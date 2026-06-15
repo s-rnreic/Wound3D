@@ -133,12 +133,23 @@ def GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file: str):
 
     
     # #3. COLMAP RERUN Streaming
-def COLMAP_RERUN(workspace_path:str, log_file:str) -> None:
+def COLMAP_RERUN(workspace_path:str, sparse_path:str, log_file:str) -> None:
     start_time = time.time()
     cameras, images, filtered_points3D=rerun_viewer.Rerun_Colmap_Pipeline(workspace_path)
+    write_model(cameras, images, filtered_points3D, sparse_path)
     elapsed_time = time.time() - start_time
     log_time(log_file, "COLMAP_RERUN", elapsed_time)
-    return cameras, images, filtered_points3D
+
+def ARUCOTracking(workspace_path:str, Tag_size: float, log_file:str)->None:
+    start_time = time.time()
+    from Pipe_Code.utils.ArUcoTracking import main as execute_aruco_tracking
+    
+    scale_factor = execute_aruco_tracking(workspace_path, Tag_size)
+    
+    elapsed_time = time.time() - start_time
+    log_time(log_file, "ARUCOTracking", elapsed_time)
+    
+    return scale_factor
 
 def ANALYSE_COLMAP_OUTPUT(workspace_path: str, sparse_path:str , log_file: str = None) -> None:
     start_time = time.time()
@@ -216,38 +227,38 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
     create_workspace(workspace_path)
     ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
-    #open_ini_in_editor(ini_path)
+    # open_ini_in_editor(ini_path)
     
     # if custom_parameters:
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    # Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=True)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=False)
 
-    # COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
+    COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
-    # sparse_path = os.path.join(workspace_path, 'sparse')
-    # os.makedirs(sparse_path, exist_ok=True)
-    # glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
-    # ctgi.create_glomap_ini(glomap_ini_path)
+    sparse_path = os.path.join(workspace_path, 'sparse')
+    os.makedirs(sparse_path, exist_ok=True)
+    glomap_ini_path=os.path.join(workspace_path ,'glomap_config.ini')
+    ctgi.create_glomap_ini(glomap_ini_path)
 
     # if custom_parameters:
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(glomap_ini_path, header, param, str(value))
 
-    # GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
+    GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file)
 
-    # ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
+    ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    # cameras, images, filtered_points3D=COLMAP_RERUN(workspace_path, log_file)
+    COLMAP_RERUN(workspace_path, sparse_path, log_file)
     
-    # write_model(cameras, images, filtered_points3D, os.path.join(sparse_path, '0'), ext=".bin")
+    ARUCOTracking(workspace_path, 0.0123, log_file)
     
-    # MVS(workspace_path, log_file)
+    MVS(workspace_path, log_file)
     
-    # processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
+    processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
     
-    # simplified_mesh_path = Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
+    simplified_mesh_path = Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
     
     Segmentation3D(workspace_path, log_file)
     
