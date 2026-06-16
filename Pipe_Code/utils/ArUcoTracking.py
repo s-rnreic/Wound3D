@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from pupil_apriltags import Detector
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -358,7 +358,7 @@ def main(workspace_path: str, Tag_size: float) -> None:
     return scale_factor
 
 if __name__ == "__main__":
-    main()
+    main(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_ArUco2", 0.0123)
     # folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\AprilTags_Scaling\Ferse\images"
     # for img in os.listdir(folder_path):
     #     img_path = os.path.join(folder_path, img)
