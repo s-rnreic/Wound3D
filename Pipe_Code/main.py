@@ -201,17 +201,11 @@ def Meshing(workspace_path:str, log_file:str, processed_pointcloud_path: Path)->
     if not poisson_mesh_path.exists():
         raise FileNotFoundError(f"Created mesh not found: {poisson_mesh_path}")
 
-    simplified_mesh_path = poisson_mesh_path.with_name("poisson_simplified.ply")
-    simplifier = MeshSimplifier(str(poisson_mesh_path))
-    simplifier.run(smooth_iterations=3, decimation_threshold=1.0, min_component_face_count=25)
-    simplifier.save(str(simplified_mesh_path))
-    
-    return simplified_mesh_path
 
-def Segmentation3D(workspace_path:str, log_file:str, simplified_mesh_path: Path=None)->None:
+def Segmentation3D(workspace_path:str, log_file:str)->None:
     from Pipe_Code.modules.WoundEdgeDetection.Wound_Detection_Mesh import main as execute_segmentation
     
-    elapse_time = execute_segmentation(workspace_path, simplified_mesh_path)
+    elapse_time = execute_segmentation(workspace_path)
     log_time(log_file, "3DSegmentation", elapse_time)
     
     return
@@ -258,7 +252,7 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
     
     processed_pointcloud_path = DensePostProcessing(workspace_path, log_file)
     
-    simplified_mesh_path = Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
+    Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
     
     Segmentation3D(workspace_path, log_file)
     
@@ -293,11 +287,11 @@ def main()->None:
 if __name__ == '__main__':
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
-    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse"
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein3"
     #video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
-    video_path = r"c:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
+    video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Testdaten-Videos\VID_20010906_032304101.mp4"
     workspace_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
-    segments = [50]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
+    segments = [20]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
    
     run_colmap_process(video_path, segments[0], {'reduce_size': resize_factor[0]}, enhance_option=None, custom_parameters=None, sharpness_value=25.0)

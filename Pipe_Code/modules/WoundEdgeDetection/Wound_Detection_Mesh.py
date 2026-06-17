@@ -45,6 +45,7 @@ if _pipe_code_dir not in sys.path:
 from CODE_Evaluation_Viewer_Align.Transformation import *
 from utils.read_write_model import read_model, qvec2rotmat
 from CODE_Evaluation_Viewer_Align.read_write_dense import read_array
+from Pipe_Code.modules.Mesh_postprocessing.MeshSimplification import MeshSimplifier
 
 
 @dataclass
@@ -348,13 +349,13 @@ class WoundModel3DMesh:
             
         # Sync numpy arrays from mesh
         self._sync_arrays_from_mesh()
-        
+
         # Build mesh topology
         self._compute_mesh_topology()
 
         # Build per-face data containers once geometry and adjacency are available.
         self._initialize_face_objects()
-        
+
         
         self.model_loaded = True
     
@@ -438,6 +439,7 @@ class WoundModel3DMesh:
         
         Builds edge adjacency and face adjacency from mesh data.
         """
+        t0 = time.perf_counter()
         print("Computing mesh topology...")
 
         # Try trimesh for fast topology extraction
@@ -471,7 +473,7 @@ class WoundModel3DMesh:
                 self.face_adjacency[int(f0)].append(int(f1))
                 self.face_adjacency[int(f1)].append(int(f0))
 
-            # Build edge adjacency from FA/FA_edges (shared edges) and add boundary edges.
+            # Build edge adjacency from shared edges.
             edge_faces = defaultdict(set)
             for i, edge in enumerate(FA_edges):
                 if i >= len(FA):
@@ -481,48 +483,52 @@ class WoundModel3DMesh:
                 edge_faces[edge_key].add(f0)
                 edge_faces[edge_key].add(f1)
 
-            # Add boundary edges so downstream boundary logic remains correct.
+            # --- OPTIMIZED: Add boundary edges with O(1) per-edge lookup ---
             edges_unique = np.asarray(mesh.edges_unique, dtype=np.int64)
             counts = np.bincount(
                 np.asarray(mesh.edges_unique_inverse, dtype=np.int64),
                 minlength=len(edges_unique),
             )
             boundary_edge_ids = np.flatnonzero(counts == 1)
+            
             if boundary_edge_ids.size > 0:
-                edge_to_id = {
-                    tuple(sorted((int(e[0]), int(e[1])))): int(idx)
-                    for idx, e in enumerate(edges_unique)
-                }
+                # Pre-build a single edge-to-face dictionary from ALL faces
+                # (one pass instead of O(boundary_edges × num_faces))
+                boundary_edges_to_find = set()
                 for edge_id in boundary_edge_ids:
                     boundary_edge = tuple(sorted((
                         int(edges_unique[edge_id][0]),
                         int(edges_unique[edge_id][1]),
                     )))
-                    if boundary_edge in edge_faces and len(edge_faces[boundary_edge]) > 0:
-                        continue
-
-                    # Assign the single incident face by scanning mesh faces once needed.
-                    incident_face = None
-                    boundary_id = edge_to_id.get(boundary_edge, None)
-                    if boundary_id is not None:
-                        for face_idx, face in enumerate(self.faces):
-                            tri_edges = (
-                                tuple(sorted((int(face[0]), int(face[1])))),
-                                tuple(sorted((int(face[1]), int(face[2])))),
-                                tuple(sorted((int(face[2]), int(face[0])))),
-                            )
-                            if boundary_edge in tri_edges:
-                                incident_face = int(face_idx)
-                                break
-                    if incident_face is not None:
-                        edge_faces[boundary_edge].add(incident_face)
+                    # Skip if already known from FA_edges (shouldn't happen, but be safe)
+                    if boundary_edge not in edge_faces:
+                        boundary_edges_to_find.add(boundary_edge)
+                
+                if boundary_edges_to_find:
+                    # One pass over all faces to build edge -> face mappings for missing edges
+                    face_arr = np.asarray(self.faces, dtype=np.int64)
+                    for face_idx in range(len(face_arr)):
+                        v0, v1, v2 = int(face_arr[face_idx, 0]), int(face_arr[face_idx, 1]), int(face_arr[face_idx, 2])
+                        e0 = (v0, v1) if v0 < v1 else (v1, v0)
+                        e1 = (v1, v2) if v1 < v2 else (v2, v1)
+                        e2 = (v2, v0) if v2 < v0 else (v0, v2)
+                        for e_key in (e0, e1, e2):
+                            if e_key in boundary_edges_to_find:
+                                edge_faces[e_key].add(face_idx)
+                                boundary_edges_to_find.discard(e_key)
+                                if not boundary_edges_to_find:
+                                    break
+                        if not boundary_edges_to_find:
+                            break
 
             self.edge_adjacency = defaultdict(list)
             for edge_key, faces_for_edge in edge_faces.items():
                 self.edge_adjacency[edge_key] = sorted(list(faces_for_edge))
 
+            elapsed = time.perf_counter() - t0
             print(
-                f"Topology computed (trimesh): {len(self.edge_adjacency)} edges, "
+                f"Topology computed (trimesh) in {elapsed:.2f}s: "
+                f"{len(self.edge_adjacency)} edges, "
                 f"{len(self.face_adjacency)} faces with neighbors"
             )
             self.topology_computed = True
@@ -1117,7 +1123,7 @@ class WoundModel3DMesh:
 
     def _build_feature_vectors(self,
                                periwound_candidate_wound_thresh: float = 0.1,
-                               periwound_candidate_top_percent: float = 20.0,
+                               periwound_candidate_top_percent: float = 60.0,
                                ring_sizes: List[int] = None,
                                use_ratio_features: bool = True,
                                use_height_deviation: bool = True,
@@ -1160,6 +1166,13 @@ class WoundModel3DMesh:
         # so that the top `periwound_candidate_top_percent`% of faces pass the threshold
         r_periwound_nonzero = r_periwound_values[r_periwound_values > 0.0]
         periwound_candidate_periwound_thresh = max(float(np.percentile(r_periwound_nonzero, 100.0 - periwound_candidate_top_percent)), 0.05) if len(r_periwound_nonzero) > 0 else 0.0
+        
+        plt.hist(r_periwound_values, bins=50, color='blue', alpha=0.7)
+        plt.axvline(periwound_candidate_periwound_thresh, color='red', linestyle='dashed', label=f'Threshold: {periwound_candidate_periwound_thresh:.4f}')
+        plt.title('Distribution of r_periwound values')
+        plt.xlabel('r_periwound')
+        plt.ylabel('Frequency')
+        plt.legend()
         print(
             f"  periwound_candidate_periwound_thresh: "
             f"{periwound_candidate_periwound_thresh:.4f}"
@@ -3754,7 +3767,209 @@ class WoundModel3DMesh:
             import traceback
             traceback.print_exc()
             return vertices, faces, colors
-    
+
+    # =========================================================================
+    # NEW FUNCTION: Detect outer boundary of periwound faces and remove outside faces
+    # =========================================================================
+    def trim_mesh_to_periwound_boundary(self,
+                                        periwound_faces: Optional[Set[int]] = None,
+                                        wound_faces: Optional[Set[int]] = None,
+                                        keep_enclosed_faces: bool = True,
+                                        return_removed_faces: bool = False) -> Set[int]:
+        """
+        Detect the outer boundary of the periwound region and identify/remove all
+        faces outside it.
+
+        Strategy:
+        ---------
+        Starting from the mesh's global outer boundary faces, flood-fill inward
+        through all faces that are *not* part of the periwound region (and optionally
+        also not part of the wound region). The flood-fill stops when it reaches
+        periwound faces — this "outer boundary" of the periwound region is where
+        the periwound meets the exterior of the mesh.
+
+        Faces visited by the flood-fill are "outside" the periwound and should be
+        removed. Their complement — the faces *inside* the periwound outer boundary
+        — is returned.
+
+        This is typically called *after* `_segment_periwound_faces()` (or
+        equivalently after `get_wound_mesh()`) when `self.current_periwound_faces`
+        is populated.
+
+        Args:
+            periwound_faces: Set of periwound face indices. If None, uses
+                `self.current_periwound_faces`.
+            wound_faces: Optional set of wound face indices. If provided, the wound
+                region is also treated as "blocking" the flood-fill (i.e. kept).
+            keep_enclosed_faces: If True, any faces that are completely enclosed by
+                the periwound (but not themselves periwound faces) are also kept.
+                This prevents "holes" inside the kept region.
+            return_removed_faces: If True, also return the set of removed face indices.
+
+        Returns:
+            If return_removed_faces is False (default):
+                Set of face indices to KEEP (inside the periwound outer boundary).
+            If return_removed_faces is True:
+                Tuple of (kept_faces, removed_faces).
+        """
+        # --- Resolve input face sets ---
+        if periwound_faces is None:
+            periwound_faces = getattr(self, "current_periwound_faces", None)
+            if periwound_faces is None:
+                raise ValueError(
+                    "periwound_faces not provided and self.current_periwound_faces is empty. "
+                    "Run get_wound_mesh() or _segment_periwound_faces() first."
+                )
+
+        periwound_faces = set(periwound_faces)
+        if not periwound_faces:
+            print("trim_mesh_to_periwound_boundary: empty periwound_faces, returning empty kept set")
+            return (set(), set()) if return_removed_faces else set()
+
+        wound_faces = set(wound_faces) if wound_faces is not None else getattr(self, "current_wound_faces", set())
+        wound_faces = set(wound_faces)
+
+        # Combined "blocking" set: flood-fill cannot cross these faces
+        blocking_faces = periwound_faces | wound_faces
+
+        # --- Sanity checks ---
+        n_faces = len(self.faces) if self.faces is not None else 0
+        if n_faces == 0:
+            print("trim_mesh_to_periwound_boundary: mesh has no faces")
+            return (set(), set()) if return_removed_faces else set()
+
+        all_faces = set(range(n_faces))
+        non_blocking_faces = all_faces - blocking_faces
+
+        if not non_blocking_faces:
+            # All faces are either periwound or wound - nothing to remove
+            print("trim_mesh_to_periwound_boundary: all faces are periwound or wound, nothing to remove")
+            kept_faces = all_faces
+            removed_faces = set()
+            self._outside_periwound_faces = removed_faces
+            self._trimmed_kept_faces = kept_faces
+            if return_removed_faces:
+                return kept_faces, removed_faces
+            return kept_faces
+
+        # --- Flood-fill from mesh boundary through non-blocking faces ---
+        boundary_faces = self._get_boundary_faces()
+
+        # Seed the queue with boundary faces that are NOT blocking (i.e. not periwound/wound)
+        seed_faces = [f for f in boundary_faces if f in non_blocking_faces]
+
+        outside_faces = set()  # Faces reachable from the boundary through non-blocking faces
+        queue = deque(seed_faces)
+
+        while queue:
+            face_idx = queue.popleft()
+            if face_idx in outside_faces:
+                continue
+            outside_faces.add(face_idx)
+
+            for adj_face in self.face_adjacency.get(face_idx, []):
+                # Only propagate through non-blocking faces that haven't been visited
+                if adj_face in non_blocking_faces and adj_face not in outside_faces:
+                    queue.append(adj_face)
+
+        # --- Determine kept vs removed ---
+        # 'outside_faces' are those reachable from the mesh boundary through non-blocking faces
+        # Periwound and wound faces are always kept (they block the flood-fill)
+        kept_faces = blocking_faces.copy()  # periwound + wound faces are kept
+
+        # Identify faces enclosed by the periwound that should also be kept
+        if keep_enclosed_faces:
+            # Enclosed faces: non-blocking faces that are NOT reachable from the boundary
+            enclosed_faces = non_blocking_faces - outside_faces
+            if enclosed_faces:
+                print(f"  Found {len(enclosed_faces)} enclosed faces inside periwound boundary, keeping them")
+                kept_faces.update(enclosed_faces)
+                self._enclosed_faces_inside_periwound = enclosed_faces
+
+        # Everything outside the periwound (reachable from boundary) is removed
+        removed_faces = outside_faces - kept_faces
+
+        print(
+            f"trim_mesh_to_periwound_boundary:\n"
+            f"  Total faces: {n_faces}\n"
+            f"  Periwound faces: {len(periwound_faces)}\n"
+            f"  Wound faces: {len(wound_faces)}\n"
+            f"  Blocking faces (kept): {len(kept_faces)}\n"
+            f"  Outside faces (removed): {len(removed_faces)}"
+        )
+
+        # Cache for external access
+        self._outside_periwound_faces = removed_faces
+        self._trimmed_kept_faces = kept_faces
+
+        if return_removed_faces:
+            return kept_faces, removed_faces
+        return kept_faces
+
+    def extract_periwound_trimmed_mesh(self,
+                                       periwound_threshold: float = 0.1,
+                                       wound_threshold: float = 0.0) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+        """
+        Extract a submesh that is trimmed to the periwound outer boundary.
+
+        Works directly after `process_periwound_face_detection()` by deriving
+        periwound faces from the `r_periwound` visibility ratios (no need to
+        run the full semantic classification first).
+
+        The function:
+        1. Selects periwound faces based on `r_periwound > periwound_threshold`
+           (and optionally wound faces based on `r_wound > wound_threshold`).
+        2. Calls `trim_mesh_to_periwound_boundary()` to flood-fill from the mesh
+           outer boundary and remove everything outside the periwound ring.
+        3. Extracts the compact submesh via `extract_submesh_from_faces()`.
+
+        Args:
+            periwound_threshold: Minimum r_periwound value for a face to be
+                considered part of the periwound region (default: 0.1).
+            wound_threshold: Minimum r_wound value for a face to be treated as
+                blocking the flood-fill (default: 0.0 — disabled). Set to e.g.
+                0.3 to also treat high-confidence wound faces as blocking.
+
+        Returns:
+            Tuple of (vertices, faces, colors) for the trimmed mesh.
+        """
+        # --- Derive periwound faces from visibility ratios if not already set ---
+        periwound_faces = getattr(self, "current_periwound_faces", None)
+        if periwound_faces is None or len(periwound_faces) == 0:
+            # No semantic periwound mask yet — use r_periwound threshold directly
+            periwound_faces = set()
+            for face_obj in self.face_objects:
+                if face_obj.r_periwound is not None and float(face_obj.r_periwound) > periwound_threshold:
+                    periwound_faces.add(face_obj.face_index)
+            if not periwound_faces:
+                print("extract_periwound_trimmed_mesh: no periwound faces found from r_periwound data")
+                return np.array([]), np.array([]), None
+            print(f"extract_periwound_trimmed_mesh: derived {len(periwound_faces)} periwound faces from r_periwound > {periwound_threshold}")
+
+        # --- Optionally derive wound faces from r_wound ---
+        wound_faces = getattr(self, "current_wound_faces", set())
+        if wound_threshold > 0.0 and len(wound_faces) == 0:
+            wound_faces = set()
+            for face_obj in self.face_objects:
+                if face_obj.r_wound is not None and float(face_obj.r_wound) > wound_threshold:
+                    wound_faces.add(face_obj.face_index)
+            if wound_faces:
+                print(f"extract_periwound_trimmed_mesh: derived {len(wound_faces)} wound faces from r_wound > {wound_threshold}")
+
+        kept_faces = self.trim_mesh_to_periwound_boundary(
+            periwound_faces=periwound_faces,
+            wound_faces=wound_faces if wound_faces else None,
+            return_removed_faces=False,
+        )
+        if not kept_faces:
+            print("extract_periwound_trimmed_mesh: no faces kept, returning empty mesh")
+            return np.array([]), np.array([]), None
+
+        print(f"Extracting trimmed mesh with {len(kept_faces)} faces...")
+        vertices, faces, colors = self.extract_submesh_from_faces(kept_faces)
+        print(f"Trimmed mesh: {len(vertices)} vertices, {len(faces)} faces")
+        return vertices, faces, colors
+
     def save_wound_mesh(self, output_path: Path, vertices: np.ndarray = None,
                        faces: np.ndarray = None, colors: np.ndarray = None):
         """
@@ -3785,22 +4000,8 @@ class WoundModel3DMesh:
             print("Open3D not available for mesh export")
 
 
-def main(workspace_path: str, simplified_mesh_path: Path=None, visualization: bool = True):
-    """
-    Example usage of mesh-based wound detection with periwound detection.
-    """
-    
-    # Example paths (adjust to your data)
-    if simplified_mesh_path is None:
-        mesh_path = Path(workspace_path) / "dense" / "poisson_simplified.ply"
-    else:
-        mesh_path = simplified_mesh_path  # Path to the simplified mesh (PLY/OBJ) generated from COLMAP dense reconstruction
-    model_path = Path(workspace_path) / "dense"
-    mask_dir = Path(workspace_path) / "dense" / "masks_wound_only_undistorted"
-    extruded_mask_dir = Path(workspace_path) / "dense" / "masks_extruded_wound_only_undistorted"
-
-    try:
-        # Initialize model
+def MeshReduction(mesh_path: str, model_path: Path, mask_dir: Path, extruded_mask_dir: Path, decimation_threshold: float = 0.7)-> Path:
+    # Initialize model
         wound_model = WoundModel3DMesh()
         
         # Load mesh
@@ -3826,8 +4027,59 @@ def main(workspace_path: str, simplified_mesh_path: Path=None, visualization: bo
         # Detect initial periwound faces from mask difference
         wound_model.process_periwound_face_detection()
         
+        # Save the periwound-trimmed mesh (removes everything outside the periwound outer boundary)
+        print("\n=== Saving Periwound-Trimmed Mesh ===")
+        trimmed_vertices, trimmed_faces, trimmed_colors = wound_model.extract_periwound_trimmed_mesh()
+        if len(trimmed_vertices) > 0:
+            trimmed_output_path = Path(model_path) / "wound_and_periwound_trimmed.ply"
+            wound_model.save_wound_mesh(trimmed_output_path, trimmed_vertices, trimmed_faces, trimmed_colors)
+            print(f"Saved periwound-trimmed mesh to: {trimmed_output_path}")
         
+            simplifier = MeshSimplifier(str(trimmed_output_path))
+            simplifier.run(smooth_iterations=3, decimation_threshold=decimation_threshold, min_component_face_count=25)
+            simplifier.save(trimmed_output_path)
+        else:
+            print("No vertices in trimmed mesh, skipping saving and simplification")
+            return mesh_path  # Return original mesh path if trimming failed
         
+        return trimmed_output_path
+        
+def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
+    """
+    Example usage of mesh-based wound detection with periwound detection.
+    """
+    
+    # Example paths (adjust to your data)
+    if mesh_path is None:
+        mesh_path = Path(workspace_path) / "dense" / "poisson.ply"
+    model_path = Path(workspace_path) / "dense"
+    mask_dir = Path(workspace_path) / "dense" / "masks_wound_only_undistorted"
+    extruded_mask_dir = Path(workspace_path) / "dense" / "masks_extruded_wound_only_undistorted"
+
+    try:
+        
+        trimmed_output_path = MeshReduction(mesh_path, model_path, mask_dir, extruded_mask_dir, decimation_threshold=0.7)
+        wound_model = WoundModel3DMesh()
+        
+        wound_model.load_mesh(trimmed_output_path, compute_normals=True)
+        # Load COLMAP cameras
+        print("\n=== Loading COLMAP Cameras ===")
+        wound_model.load_colmap_cameras(model_path)
+        
+        # Load wound masks
+        print("\n=== Loading Wound Masks ===")
+        wound_model.load_masks(mask_dir)
+        
+        # Load extruded masks for periwound detection
+        print("\n=== Loading Extruded Masks ===")
+        wound_model.load_extruded_masks(extruded_mask_dir)
+        
+        # Process wound segmentation
+        print("\n=== Processing Wound Segmentation ===")
+        wound_model.process_wound_segmentation()
+        
+        # Detect initial periwound faces from mask difference
+        wound_model.process_periwound_face_detection()
         #Run semantic classification (feature-based, 2-class: periwound, wound)
         print("\n=== Semantic Classification (Gaussian, MRF optional) ===")
         wound_model.run_semantic_classification(
@@ -3894,6 +4146,7 @@ def main(workspace_path: str, simplified_mesh_path: Path=None, visualization: bo
         wound_model.save_wound_mesh(output_path, wound_vertices, wound_faces, wound_colors)
         print(f"Saved initial wound mesh to: {output_path}")
         
+        
         print("\n=== Processing Complete ===")
         
     except Exception as e:
@@ -3902,4 +4155,4 @@ def main(workspace_path: str, simplified_mesh_path: Path=None, visualization: bo
 
 
 if __name__ == "__main__":
-    main(visualization=True)
+    main("C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\Experiments\\Bein3", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein3\dense\poisson.ply", visualization=True)
