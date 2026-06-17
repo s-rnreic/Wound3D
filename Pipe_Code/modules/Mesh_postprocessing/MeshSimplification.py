@@ -225,12 +225,12 @@ class MeshSimplifier:
         # Core simplification
         self.apply_taubin_smoothing(iterations=smooth_iterations)
         self.apply_decimation_clustering(
-            threshold=pymeshlab.PercentageValue(decimation_threshold)
-        )
+             threshold=pymeshlab.PercentageValue(decimation_threshold)
+         )
         self.apply_taubin_smoothing(iterations=smooth_iterations)
 
-        # Post-simplification cleaning
-        self.clean_mesh(min_component_face_count=min_component_face_count)
+        # # Post-simplification cleaning
+        # self.clean_mesh(min_component_face_count=min_component_face_count) --> currently this produces holes in the mesh, so we skip it for now. We can consider adding a more targeted cleaning pass if needed.
 
         return self
 
@@ -243,14 +243,14 @@ class MeshSimplifier:
         Save the current (simplified) mesh to *output_path*.
 
         Args:
-            output_path: Destination file path.
+            output_path: Destination file path (str or Path).
 
         Returns:
             The absolute path of the saved file.
         """
-        self.ms.save_current_mesh(output_path)
+        self.ms.save_current_mesh(str(output_path))
         logger.info(f"Saved simplified mesh to '{output_path}'")
-        return os.path.abspath(output_path)
+        return os.path.abspath(str(output_path))
 
     def to_trimesh(self) -> trimesh.Trimesh:
         """
@@ -645,7 +645,7 @@ class VoxelMesh:
 
 # Example usage
 if __name__ == "__main__":
-    MESH_PATH = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\poisson.ply"
+    MESH_PATH = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein4\dense\poisson.ply"
 
     # ---- MeshSimplifier workflow ----
     simplifier = MeshSimplifier(MESH_PATH)
@@ -655,7 +655,7 @@ if __name__ == "__main__":
     simplifier.run(smooth_iterations=3, decimation_threshold=1.0)
     print("After simplification:", simplifier.get_mesh_info())
 
-    simplifier.save(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_Phantom\dense\poisson_simplified.ply")
+    simplifier.save(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein4\dense\poisson_simplified.ply")
     # Convert to trimesh for downstream use (e.g. VoxelMesh)
     mesh = simplifier.to_trimesh()
     mesh.show()
