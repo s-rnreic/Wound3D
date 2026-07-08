@@ -2625,7 +2625,7 @@ class WoundModel3DMesh:
         if not seed_faces:
             return set()
         
-        std_multiplier = 1.0
+        std_multiplier = 1.6
         stats_refresh_interval = 50
         min_std = 1e-6
 
@@ -2742,7 +2742,7 @@ class WoundModel3DMesh:
 
         return distances
 
-    def _select_wound_faces(self) -> Set[int]:
+    def _select_wound_faces(self, seed_face_threshold: float = 0.2) -> Set[int]:
         """Select wound faces from visibility/probability and segment checks."""
         # Purpose: produce a high-precision wound candidate set with staged evidence filters.
         # if the filtering steps are too aggressive, this function should perform further iterations with lower thresholds rather than returning an empty set.
@@ -2762,8 +2762,64 @@ class WoundModel3DMesh:
         print("\n=== Option 3: Constrained Region Grow (wound_candidate + uncertain) ===")
 
         # Option 3 hard distance gate parameters.
-        option3_distance_source_r_wound_threshold = 0.20
-        option3_max_distance_hops = 100
+        option3_distance_source_r_wound_threshold = 0.15
+        
+        # ---- Calculate max_distance_hops from mesh density and wound extent ----
+        # Strategy: estimate how many face-adjacency hops correspond to the wound's
+        # characteristic size. Dense meshes need more hops to cover the same physical
+        # distance; sparse meshes need fewer.
+        try:
+            # 1. Estimate mesh density: average face edge length
+            if self.faces is not None and self.vertices is not None and len(self.faces) > 0:
+                v0 = self.vertices[self.faces[:, 0]]
+                v1 = self.vertices[self.faces[:, 1]]
+                v2 = self.vertices[self.faces[:, 2]]
+                e0 = np.linalg.norm(v1 - v0, axis=1)
+                e1 = np.linalg.norm(v2 - v1, axis=1)
+                e2 = np.linalg.norm(v0 - v2, axis=1)
+                all_edges = np.concatenate([e0, e1, e2])
+                # Use median edge length as robust density measure (ignore outliers)
+                median_edge_length = float(np.median(all_edges))
+                # Also compute mean for comparison
+                mean_edge_length = float(np.mean(all_edges))
+            else:
+                median_edge_length = 1.0
+                mean_edge_length = 1.0
+
+            # 2. Find faces with r_wound above threshold and compute their bounding box
+            high_rwound_faces = [
+                fi for fi in range(len(self.face_objects))
+                if float(self.face_objects[fi].r_wound or 0.0) > 0.0
+            ]
+            if high_rwound_faces and len(high_rwound_faces) > 1:
+                centroids = np.asarray([
+                    self.face_objects[fi].centroid for fi in high_rwound_faces
+                ], dtype=np.float64)
+                bbox_min = centroids.min(axis=0)
+                bbox_max = centroids.max(axis=0)
+                bbox_extent = float(np.linalg.norm(bbox_max - bbox_min))
+            else:
+                bbox_extent = 0.0
+
+            # 3. Compute max hops: how many face-widths fit across the wound extent?
+            #    Use a safety factor so the gate is generous (2x the wound diameter)
+            if median_edge_length > 1e-9 and bbox_extent > 1e-9:
+                hops_from_extent = int(np.ceil(4.0 * bbox_extent / median_edge_length))
+            else:
+                hops_from_extent = 3000  # fallback
+
+            # Clamp to reasonable range: at least 5, at most 3000
+            option3_max_distance_hops = int(np.clip(hops_from_extent, 5, 3000))
+
+            print(
+                f"  Adaptive max_distance_hops: {option3_max_distance_hops} "
+                f"(median_edge={median_edge_length:.4f}, mean_edge={mean_edge_length:.4f}, "
+                f"wound_bbox_extent={bbox_extent:.4f}, "
+                f"high_rwound_faces={len(high_rwound_faces)})"
+            )
+        except Exception as e:
+            option3_max_distance_hops = 3000
+            print(f"  Could not compute adaptive max_distance_hops, using default 3000: {e}")
 
         # Recreate Tau and labelings if not available (safe idempotent)
         Tau = 5.0
@@ -2848,25 +2904,22 @@ class WoundModel3DMesh:
             print(f"Could not log three-way labels colormap: {e}")
 
         # Ensure combined_scores exists (recompute same way as Option 2 for safety)
-        try:
-            combined_scores
-        except NameError:
-            weight_r_wound = 0.2
-            weight_r_periwound = 0.2
-            weight_log_ratio = 0.6
-            combined_scores = np.zeros(len(self.faces), dtype=np.float64)
-            for fi in range(len(self.faces)):
-                r_wound = float(self.face_objects[fi].r_wound or 0.0)
-                r_wound = np.clip(r_wound, 0.0, 1.0)
-                r_periwound = float(self.face_objects[fi].r_periwound or 0.0)
-                r_periwound = np.clip(r_periwound, 0.0, 1.0)
-                lr = float(log_ratio_arr[fi])
-                lr_norm = 1.0 / (1.0 + np.exp(-lr))
-                combined_scores[fi] = (
-                    weight_r_wound * r_wound +
-                    weight_r_periwound * (1.0 - r_periwound) +
-                    weight_log_ratio * lr_norm
-                )
+        weight_r_wound = 0.2
+        weight_r_periwound = 0.2
+        weight_log_ratio = 0.6
+        combined_scores = np.zeros(len(self.faces), dtype=np.float64)
+        for fi in range(len(self.faces)):
+            r_wound = float(self.face_objects[fi].r_wound or 0.0)
+            r_wound = np.clip(r_wound, 0.0, 1.0)
+            r_periwound = float(self.face_objects[fi].r_periwound or 0.0)
+            r_periwound = np.clip(r_periwound, 0.0, 1.0)
+            lr = float(log_ratio_arr[fi])
+            lr_norm = 1.0 / (1.0 + np.exp(-lr))
+            combined_scores[fi] = (
+                weight_r_wound * r_wound +
+                weight_r_periwound * (1.0 - r_periwound) +
+                weight_log_ratio * lr_norm
+            )
 
         
         try:
@@ -2961,74 +3014,12 @@ class WoundModel3DMesh:
                 f"Option3 distance gate: source_faces={len(distance_source_faces)}, "
                 f"max_hops={option3_max_distance_hops}, reachable_faces=0"
             )
-            
-           
-            
-        # plt.hist(combined_scores, bins=500)
-        # plt.title("Distribution of combined scores (Option 3) - Before masking")
-        # plt.xlabel("combined_score")
-        # plt.ylabel("Frequency")
-        # plt.show()
         
-        # Mask combined_scores so faces outside allowed set are very unattractive
-        masked_scores = combined_scores.copy()
         
-        # for idx in range(len(masked_scores)):
-        #     if idx not in allowed_faces:
-        #         masked_scores[idx] = -1e9
-
-        # Separate visualization for masked scores: show allowed and excluded separately
-        # allowed_scores = masked_scores[list(allowed_faces)] if allowed_faces else np.array([])
-        # excluded_scores = masked_scores[[i for i in range(len(masked_scores)) if i not in allowed_faces]]
-        
-        # fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        
-        # Plot 1: Only allowed faces scores
-        # if len(allowed_scores) > 0:
-        #     axes[0].hist(allowed_scores, bins=100)
-        #     axes[0].set_title("Allowed faces scores (wound_candidates + uncertain)")
-        #     axes[0].set_xlabel("masked_combined_score")
-        #     axes[0].set_ylabel("Frequency")
-        
-        # # Plot 2: Show that excluded faces have -1e9 penalty
-        # axes[1].hist([len(excluded_scores)], bins=1, label=f"Excluded faces: {len(excluded_scores)} @ -1e9")
-        # axes[1].set_title("Masked score distribution summary")
-        # axes[1].set_xlabel("Category")
-        # axes[1].set_ylabel("Count")
-        # axes[1].legend()
-        
-        # plt.tight_layout()
-        # plt.show()
-
-        
-        try:
-            import rerun as rr
-            from Pipe_Code.modules.WoundEdgeDetection.utils.rerun_visualization import (
-                _safe_normalize,
-                _viridis_like_colormap,
-            )
-
-            if self.vertices is not None and self.faces is not None and len(self.faces) > 0:
-                combined_score_colors = _viridis_like_colormap(_safe_normalize(masked_scores))
-                flat_vertex_positions = self.vertices[self.faces].reshape(-1, 3)
-                flat_triangle_indices = np.arange(len(self.faces) * 3, dtype=np.int32).reshape(-1, 3)
-                flat_vertex_colors = np.repeat(combined_score_colors, 3, axis=0)
-
-                rr.log(
-                    "/analysis/option3_masked_score",
-                    rr.Mesh3D(
-                        vertex_positions=np.ascontiguousarray(flat_vertex_positions, dtype=np.float64),
-                        triangle_indices=np.ascontiguousarray(flat_triangle_indices, dtype=np.int32),
-                        vertex_colors=np.ascontiguousarray(flat_vertex_colors, dtype=np.uint8),
-                    ),
-                    static=True,
-                )
-        except Exception as e:
-            print(f"Could not log masked combined score colormap: {e}")
         # Seed faces: use high r_wound like in Option 2 but constrained to allowed faces
         seed_faces = set(
             fi for fi in range(len(self.faces))
-            if float(self.face_objects[fi].r_wound or 0.0) > 0.5 and fi in allowed_faces
+            if float(self.face_objects[fi].r_wound or 0.0) > seed_face_threshold and fi in allowed_faces
         )
 
         if not seed_faces:
@@ -3041,7 +3032,7 @@ class WoundModel3DMesh:
         if seed_faces:
             grown_faces = self._region_grow_combined_scores(
                 seed_faces=seed_faces,
-                combined_scores=masked_scores,
+                combined_scores=combined_scores,
                 face_distance_hops=face_distance_hops,
                 max_distance_hops=option3_max_distance_hops,
                 max_iterations=20000,
@@ -3057,10 +3048,10 @@ class WoundModel3DMesh:
 
 
         # Store for inspection/visualization
-        self.semantic_option3_wound_candidates = wound_candidates
-        self.semantic_option3_periwound_candidates = periwound_candidates
-        self.semantic_option3_uncertain_faces = uncertain_faces
-        self.semantic_option3_grown = grown_faces
+        self.semantic_wound_candidates = wound_candidates
+        self.semantic_periwound_candidates = periwound_candidates
+        self.semantic_uncertain_faces = uncertain_faces
+        self.semantic_grown = grown_faces
 
         filtered_faces = set(grown_faces)
         print(f"Option3: final selected faces={len(filtered_faces)} (grown={len(grown_faces)}, uncertain_kept={len(uncertain_faces)})")
