@@ -3454,13 +3454,69 @@ class WoundModel3DMesh:
         
         return n_edges
 
+    def _estimate_periwound_voxel_size(self,
+                                       periwound_points: np.ndarray,
+                                       plane_origin: np.ndarray,
+                                       plane_u: np.ndarray,
+                                       plane_v: np.ndarray,
+                                       voxel_size: Optional[float]) -> Tuple[float, Optional[float]]:
+        """Estimate an aggregation voxel size from the wound boundary scale."""
+        boundary_points = None
+
+        if getattr(self, "vertices", None) is not None:
+            if getattr(self, "wound_edge_vertices", None):
+                vertex_ids = sorted(v for v in self.wound_edge_vertices if 0 <= int(v) < len(self.vertices))
+                if vertex_ids:
+                    boundary_points = np.asarray(self.vertices[vertex_ids], dtype=np.float64)
+
+            if boundary_points is None and getattr(self, "wound_edge_faces", None):
+                face_ids = sorted(f for f in self.wound_edge_faces if 0 <= int(f) < len(self.face_objects))
+                if face_ids:
+                    boundary_points = np.asarray([self.face_objects[f].centroid for f in face_ids], dtype=np.float64)
+
+        if boundary_points is None and getattr(self, "current_periwound_faces", None):
+            periwound_faces = set(self.current_periwound_faces)
+            boundary_face_ids = [
+                face_idx
+                for face_idx in periwound_faces
+                if any(adj not in periwound_faces for adj in self.face_adjacency.get(face_idx, []))
+            ]
+            if boundary_face_ids:
+                boundary_points = np.asarray([self.face_objects[f].centroid for f in boundary_face_ids], dtype=np.float64)
+
+        if boundary_points is None or len(boundary_points) < 2:
+            boundary_points = periwound_points
+
+        if boundary_points is None or len(boundary_points) < 2:
+            base_voxel_size = float(voxel_size) if voxel_size is not None and voxel_size > 0.0 else 1.0
+            return base_voxel_size, None
+
+        rel = boundary_points - plane_origin[None, :]
+        boundary_uv = np.vstack([rel @ plane_u, rel @ plane_v]).T
+        uv_span = np.ptp(boundary_uv, axis=0)
+        wound_diameter = float(np.linalg.norm(uv_span))
+
+        if not np.isfinite(wound_diameter) or wound_diameter <= 0.0:
+            base_voxel_size = float(voxel_size) if voxel_size is not None and voxel_size > 0.0 else 1.0
+            return base_voxel_size, None
+
+        base_voxel_size = float(voxel_size) if voxel_size is not None and voxel_size > 0.0 else 1.0
+        target_voxels_across_wound = 16.0
+        scaled_voxel_size = max((wound_diameter / target_voxels_across_wound) * base_voxel_size, 1e-6)
+        return scaled_voxel_size, wound_diameter
+
     def fit_periwound_surface(self,
                               method: str = "rbf",
                               voxel_size: Optional[float] = None,
                               grid_resolution: int = 128,
                               smoothing: float = 0.0,
                               spline_degree: int = 3,
-                              return_points: bool = False) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+                              return_points: bool = False,
+                              outer_weighting_exponent: float = 0.0,
+                              function_name: str = 'gaussian',
+                              weighting_mode: str = "power",
+                              inner_weight: float = 0.7,
+                              ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """
         Fit a smooth surface through the current periwound faces and return a mesh or sample points.
 
@@ -3471,11 +3527,36 @@ class WoundModel3DMesh:
 
         Args:
             method: 'rbf' or 'spline' (falls back to a simple poly fit if SciPy not available)
-            voxel_size: Optional voxel size for aggregating normals/points before fitting.
+            voxel_size: Optional base voxel size for aggregating normals/points before fitting.
+                When wound boundary geometry is available, the effective voxel size
+                is scaled from that boundary size so the aggregation stays proportional
+                to the wound extent.
             grid_resolution: Grid resolution for sampled output (per axis).
             smoothing: Regularization/smoothing parameter for spline/rbf where applicable.
             spline_degree: Degree for bivariate spline when used.
             return_points: If True, return sampled points instead of a triangulated mesh.
+            outer_weighting_exponent: Controls how much outer periwound faces dominate
+                the surface fit. 0.0 = all faces weighted equally (default).
+                > 0.0 = faces farther from the wound boundary get more influence.
+                The exact mapping depends on `weighting_mode`.
+            function_name: RBF kernel function name passed to scipy RBFInterpolator/Rbf.
+                Options: 'gaussian', 'multiquadric', 'inverse_multiquadric',
+                'thin_plate_spline', 'linear', 'cubic', 'quintic'.
+            weighting_mode: How to convert topological distance to per-face weight.
+                Options:
+                - "power" (default): weight = (d / max_d) ** exponent.
+                  Inner-boundary faces get weight ≈ 0 (clipped to 1e-6).
+                - "linear_floor": weight = inner_weight + (1 - inner_weight) * (d / max_d).
+                  Inner-boundary faces get weight = inner_weight (default 0.5),
+                  outermost faces get weight = 1.0. The exponent parameter is ignored.
+                - "sigmoid": weight = 1 / (1 + exp(-steepness * (d / max_d - midpoint))).
+                  Uses exponent as steepness (default 5.0) and inner_weight as midpoint
+                  (default 0.5). Creates an S-curve transition.
+                - "linear": weight = d / max_d (same as power with exponent=1.0).
+                  Inner-boundary faces get weight ≈ 0.
+            inner_weight: Minimum weight for inner-boundary faces when using
+                "linear_floor" or "sigmoid" modes. Default 0.7 means inner-boundary
+                faces are 70% as important as outer faces.
 
         Returns:
             (vertices, faces) mesh tuple or (points, None) if return_points=True. Returns None on failure.
@@ -3486,12 +3567,103 @@ class WoundModel3DMesh:
             print("fit_periwound_surface: no periwound faces available (run get_wound_mesh first)")
             return None
 
+        periwound_faces = set(periwound_faces)
+
         # Collect centroids and normals
-        pts = np.asarray([self.face_objects[f].centroid for f in sorted(periwound_faces)], dtype=np.float64)
-        normals = np.asarray([self.face_objects[f].face_normal for f in sorted(periwound_faces) if self.face_objects[f].face_normal is not None], dtype=np.float64)
+        sorted_pw = sorted(periwound_faces)
+        pts = np.asarray([self.face_objects[f].centroid for f in sorted_pw], dtype=np.float64)
+        normals = np.asarray([self.face_objects[f].face_normal for f in sorted_pw if self.face_objects[f].face_normal is not None], dtype=np.float64)
         if pts.size == 0:
             print("fit_periwound_surface: no centroid points available")
             return None
+
+        # ---- Compute per-face weights from topological distance to wound boundary ----
+        weights = None
+        if outer_weighting_exponent > 0.0:
+            wound_faces = getattr(self, "current_wound_faces", None)
+            if wound_faces is not None and len(wound_faces) > 0:
+                wound_faces = set(wound_faces)
+                # Inner boundary: periwound faces that share an edge with a wound face
+                inner_boundary = set()
+                for f in periwound_faces:
+                    for adj in self.face_adjacency.get(f, []):
+                        if adj in wound_faces:
+                            inner_boundary.add(f)
+                            break
+
+                if inner_boundary:
+                    # BFS from inner boundary through periwound faces to compute topological distance
+                    distance = {f: 0 for f in inner_boundary}
+                    queue = deque(inner_boundary)
+                    while queue:
+                        current = queue.popleft()
+                        for adj in self.face_adjacency.get(current, []):
+                            if adj in periwound_faces and adj not in distance:
+                                distance[adj] = distance[current] + 1
+                                queue.append(adj)
+
+                    # Convert distance to weight using the selected weighting mode
+                    max_dist = max(distance.values()) if distance else 1.0
+                    if max_dist > 0:
+                        raw_d = np.array([
+                            float(distance.get(f, 0)) / max_dist
+                            for f in sorted_pw
+                        ], dtype=np.float64)
+
+                        if weighting_mode == "linear_floor":
+                            # Linear from inner_weight at d=0 to 1.0 at d=1.0
+                            # inner_boundary faces get weight = inner_weight (e.g. 0.5 = 50% importance)
+                            inner_weight = float(np.clip(inner_weight, 0.01, 0.99))
+                            weights = inner_weight + (1.0 - inner_weight) * raw_d
+                            print(
+                                f"  Outer weighting: mode='linear_floor', "
+                                f"inner_weight={inner_weight:.2f}, "
+                                f"inner_boundary_faces={len(inner_boundary)}, "
+                                f"max_distance={max_dist}, "
+                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
+                            )
+
+                        elif weighting_mode == "sigmoid":
+                            # S-curve: smooth transition from low to high weight
+                            steepness = float(outer_weighting_exponent) if outer_weighting_exponent > 0 else 5.0
+                            midpoint = float(np.clip(inner_weight, 0.1, 0.9))
+                            weights = 1.0 / (1.0 + np.exp(-steepness * (raw_d - midpoint)))
+                            # Normalize so max weight = 1.0
+                            weights = weights / (weights.max() + 1e-9)
+                            print(
+                                f"  Outer weighting: mode='sigmoid', "
+                                f"steepness={steepness:.1f}, midpoint={midpoint:.2f}, "
+                                f"inner_boundary_faces={len(inner_boundary)}, "
+                                f"max_distance={max_dist}, "
+                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
+                            )
+
+                        elif weighting_mode == "linear":
+                            # Simple linear: weight = d / max_d
+                            weights = raw_d.copy()
+                            weights = np.clip(weights, 1e-6, 1.0)
+                            print(
+                                f"  Outer weighting: mode='linear', "
+                                f"inner_boundary_faces={len(inner_boundary)}, "
+                                f"max_distance={max_dist}, "
+                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
+                            )
+
+                        else:  # "power" (default)
+                            # Power scaling: weight = (d / max_d) ** exponent
+                            weights = raw_d ** outer_weighting_exponent
+                            weights = np.clip(weights, 1e-6, 1.0)
+                            print(
+                                f"  Outer weighting: mode='power', "
+                                f"exponent={outer_weighting_exponent}, "
+                                f"inner_boundary_faces={len(inner_boundary)}, "
+                                f"max_distance={max_dist}, "
+                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
+                            )
+                else:
+                    print("  Warning: no inner boundary faces found, using uniform weights")
+            else:
+                print("  Warning: no wound faces available for distance weighting, using uniform weights")
 
         # Fit local plane and build local coordinate system
         plane_normal, plane_d = self._fit_plane(pts, face_normals=normals if normals.size > 0 else None)
@@ -3512,37 +3684,87 @@ class WoundModel3DMesh:
         uv = np.vstack([rel @ u, rel @ v]).T
         z = (rel @ n).ravel()
 
+        effective_voxel_size, wound_diameter = self._estimate_periwound_voxel_size(
+            periwound_points=pts,
+            plane_origin=origin,
+            plane_u=u,
+            plane_v=v,
+            voxel_size=voxel_size,
+        )
+        if wound_diameter is not None:
+            print(
+                f"fit_periwound_surface: wound diameter ~ {wound_diameter:.4f}, "
+                f"voxel_size -> {effective_voxel_size:.4f}"
+            )
+
         # Optional voxelization/aggregation of points and normals
-        if voxel_size is not None and voxel_size > 0.0:
+        if effective_voxel_size is not None and effective_voxel_size > 0.0:
             # voxelize in uv plane
-            vox_idx = np.floor(uv / float(voxel_size)).astype(np.int64)
+            vox_idx = np.floor(uv / float(effective_voxel_size)).astype(np.int64)
             keys = [tuple(k) for k in vox_idx.tolist()]
             agg = {}
             for i, k in enumerate(keys):
                 if k not in agg:
-                    agg[k] = {'uv': [], 'z': [], 'n': []}
+                    agg[k] = {'uv': [], 'z': [], 'n': [], 'w': []}
                 agg[k]['uv'].append(uv[i])
                 agg[k]['z'].append(z[i])
                 if i < len(normals):
                     agg[k]['n'].append(normals[i])
+                if weights is not None:
+                    agg[k]['w'].append(weights[i])
 
             uv_list = []
             z_list = []
+            weights_list = []
             for k, vdata in agg.items():
                 uv_list.append(np.mean(vdata['uv'], axis=0))
                 z_list.append(np.mean(vdata['z'], axis=0))
+                if vdata['w']:
+                    weights_list.append(np.mean(vdata['w'], axis=0))
             uv = np.asarray(uv_list, dtype=np.float64)
             z = np.asarray(z_list, dtype=np.float64)
+            if weights_list:
+                weights = np.asarray(weights_list, dtype=np.float64)
+                print(f"  Voxelization aggregated weights: {len(weights)} points, range=[{weights.min():.4f}, {weights.max():.4f}]")
 
         # Choose fitting backend: try SciPy RBF / SmoothBivariateSpline
         fitted = None
+        function_name = function_name
         try:
             if method == 'rbf':
-                from scipy.interpolate import Rbf
-                rbf = Rbf(uv[:, 0], uv[:, 1], z, function='thin_plate', smooth=float(smoothing))
-                def evaluator(xi, yi):
-                    return rbf(xi, yi)
-                fitted = evaluator
+                if weights is not None and outer_weighting_exponent > 0.0:
+                    # Use RBFInterpolator which supports per-point smoothing (weights)
+                    try:
+                        from scipy.interpolate import RBFInterpolator
+                        # Convert weights to smoothing: higher weight = less smoothing (trust more)
+                        # Invert so outer faces (high weight) get low smoothing, inner faces get high smoothing
+                        per_point_smoothing = float(smoothing) * (1.0 - weights) + 1e-9
+                        rbf = RBFInterpolator(
+                            uv, z[:, None],
+                            kernel=function_name,
+                            smoothing=per_point_smoothing,
+                        )
+                        def evaluator(xi, yi):
+                            xi_arr = np.asarray(xi).ravel()
+                            yi_arr = np.asarray(yi).ravel()
+                            pts = np.column_stack([xi_arr, yi_arr])
+                            return rbf(pts).ravel().reshape(xi.shape)
+                        fitted = evaluator
+                        print(f"  Using RBFInterpolator with per-point smoothing (weight range: [{weights.min():.4f}, {weights.max():.4f}])")
+                    except (ImportError, AttributeError):
+                        # Fall back to legacy Rbf (no per-point weights)
+                        from scipy.interpolate import Rbf
+                        rbf = Rbf(uv[:, 0], uv[:, 1], z, function=function_name, smooth=float(smoothing))
+                        def evaluator(xi, yi):
+                            return rbf(xi, yi)
+                        fitted = evaluator
+                        print("  RBFInterpolator not available, using legacy Rbf (weights not applied)")
+                else:
+                    from scipy.interpolate import Rbf
+                    rbf = Rbf(uv[:, 0], uv[:, 1], z, function=function_name, smooth=float(smoothing))
+                    def evaluator(xi, yi):
+                        return rbf(xi, yi)
+                    fitted = evaluator
             elif method == 'spline':
                 from scipy.interpolate import SmoothBivariateSpline
                 s = float(smoothing) if smoothing is not None else 0.0
@@ -3551,9 +3773,15 @@ class WoundModel3DMesh:
                     return spline.ev(xi, yi)
                 fitted = evaluator
         except Exception:
-            # SciPy not available or failed -> fallback to quadratic polynomial least-squares
+            # SciPy not available or failed -> fallback to weighted quadratic polynomial least-squares
             A = np.vstack([np.ones(len(uv)), uv[:, 0], uv[:, 1], uv[:, 0] ** 2, uv[:, 0] * uv[:, 1], uv[:, 1] ** 2]).T
-            coeffs, *_ = np.linalg.lstsq(A, z, rcond=None)
+            if weights is not None and outer_weighting_exponent > 0.0:
+                # Weighted least-squares: minimize sum(w_i * (A_i @ coeffs - z_i)^2)
+                W = np.diag(weights)
+                coeffs = np.linalg.lstsq(A.T @ W @ A, A.T @ W @ z, rcond=None)[0]
+                print(f"  Using weighted polynomial least-squares")
+            else:
+                coeffs, *_ = np.linalg.lstsq(A, z, rcond=None)
             def evaluator(xi, yi):
                 xi = np.asarray(xi)
                 yi = np.asarray(yi)
