@@ -135,6 +135,7 @@ def GLOMAP_Pipeline(workspace_path, glomap_ini_path, log_file: str):
     # #3. COLMAP RERUN Streaming
 def COLMAP_RERUN(workspace_path:str, sparse_path:str, log_file:str) -> None:
     start_time = time.time()
+    sparse_path = os.path.join(sparse_path, '0')  # Assuming the sparse reconstruction is in the '0' folder
     cameras, images, filtered_points3D=rerun_viewer.Rerun_Colmap_Pipeline(workspace_path)
     write_model(cameras, images, filtered_points3D, sparse_path)
     elapsed_time = time.time() - start_time
@@ -244,7 +245,7 @@ def run_colmap_process(video_path, segments, image_options, enhance_option=None,
 
     ANALYSE_COLMAP_OUTPUT(workspace_path, sparse_path , log_file)
     
-    COLMAP_RERUN(workspace_path, sparse_path, log_file)
+    COLMAP_RERUN(workspace_path, sparse_path, log_file) #This step only make sense when there is a bundle adjustment afterwards implemented
     
     ARUCOTracking(workspace_path, 0.0123, log_file)
     
