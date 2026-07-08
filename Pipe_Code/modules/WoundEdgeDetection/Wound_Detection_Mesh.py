@@ -3128,13 +3128,9 @@ class WoundModel3DMesh:
 
     def _refine_wound_faces(self,
                             face_set: Set[int],
-                            use_connectivity: bool,
                             min_component_faces: int,
-                            use_closing: bool,
                             closing_iterations: int,
                             closing_kernel_size: int,
-                            use_probability_validation: bool,
-                            wound_prob_threshold: float,
                             boundary_growth_max_iterations: int = 25) -> Set[int]:
         """Refine selected wound faces (closing, smoothing, connectivity cleanup)."""
                     # Purpose: convert coarse wound candidates into a geometrically coherent final region.
@@ -3142,31 +3138,26 @@ class WoundModel3DMesh:
         if not filtered_faces:
             return set()
 
-        if use_closing:
-            pre_close = set(filtered_faces)
-            boundary_loop_count = self._count_boundary_loops_in_face_set(filtered_faces)
-            print(f"Boundary loop count before closing: {boundary_loop_count}")
 
-    
-            filtered_faces = self.morphological_closing_opening(
-                filtered_faces,
-                operation="closing",
-                geodesic_radius=closing_kernel_size,
-                iterations=closing_iterations,
-            )
-            
-            filtered_faces = self.morphological_closing_opening(
-                filtered_faces,
-                operation="opening",
-                geodesic_radius=closing_kernel_size,
-                iterations=closing_iterations,
-            )
-            self.added_faces_closing = set(filtered_faces) - pre_close
+        boundary_loop_count = self._count_boundary_loops_in_face_set(filtered_faces)
+        print(f"Boundary loop count before closing: {boundary_loop_count}")
 
-        else:
-            self.added_faces_closing = set()
 
-        self.post_closing_wound_faces_stage = set(filtered_faces)
+        filtered_faces = self.morphological_closing_opening(
+            filtered_faces,
+            operation="closing",
+            geodesic_radius=closing_kernel_size,
+            iterations=closing_iterations,
+        )
+        
+        filtered_faces = self.morphological_closing_opening(
+            filtered_faces,
+            operation="opening",
+            geodesic_radius=closing_kernel_size,
+            iterations=closing_iterations,
+        )
+
+        self.log_wound(filtered_faces, stage_name="post_closing")
 
         if not filtered_faces:
             print("Warning: No wound faces remain after closing")
@@ -3174,10 +3165,7 @@ class WoundModel3DMesh:
 
         filtered_faces = self.expand_and_extract_components(
             filtered_faces,
-            use_connectivity,
             min_component_faces,
-            use_probability_validation=use_probability_validation,
-            wound_prob_threshold=wound_prob_threshold
         )
 
         self.log_wound(filtered_faces, stage_name="post_closing_and_connectivity")
@@ -3186,6 +3174,8 @@ class WoundModel3DMesh:
             filtered_faces,
             max_iterations=boundary_growth_max_iterations,
         )
+        
+        self.log_wound(filtered_faces, stage_name="post_boundary_growth")
         
         if not filtered_faces:
             print("Warning: No wound faces remain after component extraction")
@@ -3196,18 +3186,12 @@ class WoundModel3DMesh:
     
     
     def get_wound_mesh(self,
-                      use_connectivity: bool = True,
                       min_component_faces: int = 10,
-                      use_closing: bool = True,
                       closing_iterations: int = 1,
                       closing_kernel_size: int = 1,
                       boundary_growth_max_iterations: int = 25,
-                      Use_log_ratio=True,
-                      postrefine_mode: str = "boundary_smoothness",
                       periwound_thickness: int = 30,
                       periwound_use_semantic_candidates: bool = True,
-                      use_probability_validation: bool = False,
-                      wound_prob_threshold: float = 0.3,
                     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Get final wound mesh after all filtering steps.
@@ -3250,13 +3234,9 @@ class WoundModel3DMesh:
         # Step 2: Refinement stage (closing, boundary smoothing, connectivity cleanup).
         filtered_faces = self._refine_wound_faces(
             face_set=selected_faces,
-            use_connectivity=use_connectivity,
             min_component_faces=min_component_faces,
-            use_closing=use_closing,
             closing_iterations=closing_iterations,
             closing_kernel_size=closing_kernel_size,
-            use_probability_validation=use_probability_validation,
-            wound_prob_threshold=wound_prob_threshold,
             boundary_growth_max_iterations=boundary_growth_max_iterations,
         )
         self.log_wound(filtered_faces, stage_name="refined")
@@ -3271,10 +3251,17 @@ class WoundModel3DMesh:
         self.current_periwound_faces = set(periwound_faces)
         self.periwound_edge_faces = set(periwound_faces)
         self.log_wound(periwound_faces, stage_name="periwound_region")
-        self.compute_wound_edge(selected_faces)
+        self.compute_wound_edge(filtered_faces)
+        self.log_wound(self.wound_edge_faces, stage_name="wound_edge")
 
-        self.fit_periwound_surface(voxel_size=1.0, grid_resolution=64, smoothing=1.0)
-        self.visualize_periwound_surface()
+        # for f_name in ["gaussian", "linear", "multiquadric", "inverse_multiquadric", "thin_plate"]:
+        #     for weight_mode in ["linear_floor", "linear", "sigmoid"]:
+        #         for smoothing in [0.0, 0.1, 0.5]:
+        #             for voxel_size in [1.0, 2.0, 3.0]:
+                        #self.fit_periwound_surface(voxel_size=voxel_size, grid_resolution=100, smoothing=smoothing, outer_weighting_exponent=1.0, function_name=f_name, weighting_mode=weight_mode)
+                        #self.visualize_periwound_surface(session_path=f"/analysis/periwound_surface_{f_name}_voxel{voxel_size:.1f}_smooth{smoothing:.2f}_weight{weight_mode}")
+        self.fit_periwound_surface(voxel_size=1.0, grid_resolution=100, smoothing=0.0, outer_weighting_exponent=0.0, function_name="linear", weighting_mode="linear")
+        self.visualize_periwound_surface(session_path=f"/analysis/periwound_surface_linear_voxel2.0")
         print(
             f"Periwound segmentation complete: {len(periwound_faces)} faces "
             f"(thickness={self.periwound_thickness}, semantic_support={periwound_use_semantic_candidates})"
@@ -3308,18 +3295,8 @@ class WoundModel3DMesh:
                                  thickness: int = 2,
                                  use_semantic_candidates: bool = True) -> Set[int]:
         """Build a periwound shell by growing outward from the wound boundary."""
-        if not wound_faces:
-            self.periwound_boundary_normal_reference = None
-            self.periwound_face_normal_reference = None
-            self.periwound_boundary_alignment = None
-            return set()
 
         thickness = max(0, int(thickness))
-        if thickness == 0:
-            self.periwound_boundary_normal_reference = None
-            self.periwound_face_normal_reference = None
-            self.periwound_boundary_alignment = None
-            return set()
 
         wound_faces = set(wound_faces)
         periwound_faces: Set[int] = set()
@@ -3342,7 +3319,7 @@ class WoundModel3DMesh:
         periwound_faces -= wound_faces
 
         if use_semantic_candidates:
-            semantic_candidates = set(getattr(self, "semantic_option3_periwound_candidates", set()) or set())
+            semantic_candidates = set(getattr(self, "semantic_periwound_candidates", set()) or set())
             if semantic_candidates:
                 shell_support = wound_faces | periwound_faces
                 supported_semantic_faces = {
@@ -4034,10 +4011,10 @@ def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
 
     try:
         
-        trimmed_output_path = MeshReduction(mesh_path, model_path, mask_dir, extruded_mask_dir, decimation_threshold=0.7)
+        mesh_path = MeshReduction(mesh_path, model_path, mask_dir, extruded_mask_dir, decimation_threshold=0.7) #Creates a periwound-trimmed mesh based on mask projection. Basically removes everything outside the periwound outer boundary. It then simplifies the mesh to reduce face count while preserving detail.
         wound_model = WoundModel3DMesh()
         
-        wound_model.load_mesh(trimmed_output_path, compute_normals=True)
+        wound_model.load_mesh(mesh_path, compute_normals=True)
         # Load COLMAP cameras
         print("\n=== Loading COLMAP Cameras ===")
         wound_model.load_colmap_cameras(model_path)
@@ -4082,10 +4059,8 @@ def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
         
         # # Get final wound mesh with mesh-specific filtering
         print("\n=== Extracting Wound Mesh ===")
-        wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh( #wound_vertices, wound_faces, wound_colors =
-            use_connectivity=True,  # Extract connected components
+        wound_vertices, wound_faces, wound_colors = wound_model.get_wound_mesh(
             min_component_faces=100,  # Minimum size for valid component
-            use_closing=True,  # Apply morphological closing
             closing_iterations=5,  # Number of closing iterations
             closing_kernel_size=2,  # Number of adjacency layers per iteration (1-3 typical)
         )
