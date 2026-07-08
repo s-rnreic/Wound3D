@@ -65,7 +65,7 @@ def map_error_to_color(errors: list[float]) -> list[list[int]]:
 
 def read_and_log_sparse_reconstruction(dataset_path: Path, filter_output: bool=False, resize: tuple[int, int]=None):
     #print("Reading sparse COLMAP reconstruction")
-    sparse_path = dataset_path / 'sparse/0'
+    sparse_path = dataset_path / 'sparse/0' #This here might be problematic if the sparse reconstruction is not in the '0' folder. You might want to make this more flexible.
     cameras, images, points3D = read_model(sparse_path, ext=".bin")
 
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)

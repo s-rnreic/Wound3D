@@ -2120,8 +2120,6 @@ class WoundModel3DMesh:
             f"max_iterations={max_iterations}"
         )
         
-        # import rerun as rr
-        # rr.init("Test", spawn=True)
         for iteration in range(max_iterations):
             candidate_faces = set()
             for face_idx in filtered_faces:
@@ -2132,18 +2130,17 @@ class WoundModel3DMesh:
                 print(f"Boundary-guided growth stopped at iteration {iteration + 1}: no adjacent faces left")
                 break
 
-            best_candidate = None
-            best_boundary_perimeter = current_boundary_perimeter
-
+            # Test every candidate against the current boundary perimeter.
+            # Add ALL candidates whose inclusion does not increase the perimeter.
+            accepted_faces = set()
             for candidate_face in sorted(candidate_faces):
                 trial_faces = filtered_faces | {candidate_face}
                 trial_boundary_perimeter, _trial_boundary_vertices = self._get_boundary_loop_lengths_in_face_set(trial_faces)
 
-                if trial_boundary_perimeter <= best_boundary_perimeter:
-                    best_candidate = candidate_face
-                    best_boundary_perimeter = trial_boundary_perimeter
+                if trial_boundary_perimeter <= current_boundary_perimeter:
+                    accepted_faces.add(candidate_face)
 
-            if best_candidate is None:
+            if not accepted_faces:
                 print(
                     f"Boundary-guided growth stopped at iteration {iteration + 1}: "
                     f"no adjacent face reduced the boundary perimeter "
@@ -2151,11 +2148,10 @@ class WoundModel3DMesh:
                 )
                 return filtered_faces
 
-            filtered_faces.add(best_candidate)
-            current_boundary_perimeter = best_boundary_perimeter
+            filtered_faces.update(accepted_faces)
             current_boundary_perimeter, _boundary_vertices = self._get_boundary_loop_lengths_in_face_set(filtered_faces)
             print(
-                f"Boundary-guided growth iteration {iteration + 1}: added face {best_candidate}, "
+                f"Boundary-guided growth iteration {iteration + 1}: added {len(accepted_faces)} faces, "
                 f"boundary_perimeter={current_boundary_perimeter:.6f}"
             )
 
@@ -2332,10 +2328,8 @@ class WoundModel3DMesh:
         )
     
     def expand_and_extract_components(self, face_set: Set[int],
-                                     use_connectivity: bool = True,
-                                     min_component_faces: int = 10,
-                                     use_probability_validation: bool = True,
-                                     wound_prob_threshold: float = 0.3) -> Set[int]:
+                                     min_component_faces: int = 100,
+                                     ) -> Set[int]:
         """
         Expand wound to include enclosed faces and extract connected components.
         
@@ -2353,68 +2347,61 @@ class WoundModel3DMesh:
         Returns:
             Set of final face indices including enclosed faces
         """
-        # Purpose: recover enclosed wound regions and keep only valid connected structures.
-        if not face_set:
-            return face_set
         
         
         # Step 1: Expand wound to include enclosed non-wound faces
-        if use_connectivity:
-            pre_expand = set(face_set)
-            
-            # Get mesh boundary faces (edges with only one adjacent face)
-            boundary_faces = self._get_boundary_faces()
-            
-            # All non-wound faces that could potentially be enclosed
-            all_faces_set = set(range(len(self.faces)))
-            non_wound_faces = all_faces_set - face_set
-            
-            # Flood-fill from boundary through non-wound faces
-            # Faces reachable from boundary are "outside", others are "enclosed"
-            queue = deque([f for f in boundary_faces if f in non_wound_faces])
-            outside = set()
-            
-            while queue:
-                face_idx = queue.popleft()
-                if face_idx in outside:
-                    continue
-                outside.add(face_idx)
-                
-                # Explore adjacent non-wound faces
-                for adj_face in self.face_adjacency.get(face_idx, []):
-                    if adj_face in non_wound_faces and adj_face not in outside:
-                        queue.append(adj_face)
-            
-            # Enclosed faces are non-wound faces that couldn't be reached
-            enclosed_faces_raw = non_wound_faces - outside
-            
-            # Validate enclosed faces using probability map
-            if use_probability_validation and enclosed_faces_raw:
-                validated_enclosed = set()
-                rejected_enclosed = set()
-                for face_idx in enclosed_faces_raw:
 
-                    validated_enclosed.add(face_idx)
 
-                enclosed_faces = validated_enclosed
-                
-                if rejected_enclosed:
-                    print(f"Probability validation rejected {len(rejected_enclosed)} enclosed faces (threshold={wound_prob_threshold:.2f})")
-            else:
-                enclosed_faces = enclosed_faces_raw
-            
-            if enclosed_faces:
-                print(f"Found {len(enclosed_faces)} enclosed faces, adding to wound region")
-            
-            # Combine original wound faces with enclosed faces
-            expanded_faces = face_set | enclosed_faces
-            self.added_faces_enclosed = enclosed_faces
-        else:
-            expanded_faces = face_set
-            self.added_faces_enclosed = set()
+        # Get mesh boundary faces (edges with only one adjacent face)
+        boundary_faces = self._get_boundary_faces()
         
+        # All non-wound faces that could potentially be enclosed
+        all_faces_set = set(range(len(self.faces)))
+        non_wound_faces = all_faces_set - face_set
+        
+        
+        self.log_wound(non_wound_faces, stage_name="non_wound_faces_before_enclosed_expansion")
+        # Restrict flood-fill to only faces classified as semantic wound candidates
+        # or uncertain faces (from three-way classification in _select_wound_faces).
+        # This prevents propagation through periwound or tissue regions.
+        semantic_allowed = set()
+        semantic_wound = getattr(self, "semantic_wound_candidates", None)
+        semantic_uncertain = getattr(self, "semantic_uncertain_faces", None)
+
+        semantic_allowed = set(semantic_wound) | set(semantic_uncertain)
+
+        self.log_wound(non_wound_faces, stage_name="floodable_faces_before_enclosed_expansion")
+        # Flood-fill from boundary through floodable faces
+        # Faces reachable from boundary are "outside", others are "enclosed"
+        queue = deque([f for f in boundary_faces if f in non_wound_faces])
+        outside = set()
+        
+        while queue:
+            face_idx = queue.popleft()
+            if face_idx in outside:
+                continue
+            outside.add(face_idx)
+            
+            # Explore adjacent floodable faces
+            for adj_face in self.face_adjacency.get(face_idx, []):
+                if adj_face in non_wound_faces and adj_face not in outside:
+                    queue.append(adj_face)
+        
+        # Enclosed faces are floodable faces that couldn't be reached
+        enclosed_faces = non_wound_faces - outside
+        
+        enclosed_faces = {f for f in enclosed_faces if f in semantic_allowed}
+        
+        if enclosed_faces:
+            print(f"Found {len(enclosed_faces)} enclosed faces, adding to wound region")
+        
+        # Combine original wound faces with enclosed faces
+        expanded_faces = face_set | enclosed_faces
+        self.added_faces_enclosed = enclosed_faces
+
+        self.log_wound(expanded_faces, stage_name="post_enclosed_face_expansion")
         # Step 2: Extract connected components and select largest
-        if use_connectivity and len(expanded_faces) > 0:
+        if len(expanded_faces) > 0:
             pre_connectivity = set(expanded_faces)
             components = self.extract_connected_components(expanded_faces, min_component_faces)
             
@@ -2428,9 +2415,7 @@ class WoundModel3DMesh:
                 final_faces = set()
             
             self.removed_faces_connectivity = pre_connectivity - set(final_faces)
-        else:
-            final_faces = expanded_faces
-            self.removed_faces_connectivity = set()
+
         
         return final_faces
 
