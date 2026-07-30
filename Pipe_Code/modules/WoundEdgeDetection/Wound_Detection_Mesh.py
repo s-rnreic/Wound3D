@@ -260,27 +260,6 @@ class WoundModel3DMesh:
         self.spectators = {}  # Dict: image_name -> Spectator
         self.cameras = {}
         self.images = {}
-        
-        # Periwound tracking (boundary region detected from mask difference)
-        self.periwound_edge_faces = set()  # Faces detected in periwound region
-        self.periwound_edge_visibility_count = {}  # face_idx -> count of cameras seeing periwound
-        self.periwound_edge_mean_color = {}  # face_idx -> mean color [R, G, B]
-        self.periwound_edge_color_std = {}  # face_idx -> color std dev
-        self.periwound_edge_camera_data = {}  # face_idx -> list of per-camera measurements
-        
-        # Normal tissue tracking (healthy tissue unaffected by wound - from undistorted mask difference)
-        self.normal_tissue_face_indices = set()  # Faces detected in normal tissue region
-        self.normal_tissue_visibility_count = {}  # face_idx -> count of cameras seeing normal tissue
-        
-        # Confidence maps based on visibility
-        self.wound_confidence_map = {}  # face_idx -> confidence [0-1] based on wound visibility
-        self.periwound_edge_confidence_map = {}  # face_idx -> confidence [0-1] based on periwound visibility
-        self.overlapping_faces = set()  # Faces seen in both wound and periwound
-        self.overlapping_wound_counts = {}  # face_idx -> wound visibility count for overlapping faces
-        self.overlapping_tissue_counts = {}  # face_idx -> periwound visibility count for overlapping faces
-
-        # Semantic classification (feature-based confidence)
-        self.semantic_feature_names = []  # List of feature names
         self.semantic_face_indices = []  # Faces used for semantic classification
         self.semantic_features = None  # (N, D) feature matrix for semantic classification
         self.semantic_posteriors = {}  # face_idx -> np.array([p_periwound, p_wound])
@@ -1798,41 +1777,6 @@ class WoundModel3DMesh:
 
     # Rerun visualization was moved to rerun_visualization.py to keep this file focused.
 
-
-    
-
-
-    
-
-    def _compute_periwound_edge_face_stats(self, face_idx: int):
-        """Compute per-face color statistics for periwound faces across all cameras.
-        
-        Args:
-            face_idx: Face index in self.faces
-        """
-        # Purpose: summarize local color appearance for periwound boundary faces.
-        if face_idx not in self.periwound_edge_faces:
-            return
-        
-        # Get vertex colors for this face
-        face = self.faces[face_idx]
-        if self.vertex_colors is None:
-            # Default colors if not available
-            self.periwound_edge_mean_color[face_idx] = np.array([0.5, 0.5, 0.5])
-            self.periwound_edge_color_std[face_idx] = np.array([0.0, 0.0, 0.0])
-            return
-        
-        # Collect vertex colors
-        vertex_colors = self.vertex_colors[face]  # (3, 3) array
-        mean_color = np.mean(vertex_colors, axis=0)
-        std_color = np.std(vertex_colors, axis=0)
-        
-        self.periwound_edge_mean_color[face_idx] = mean_color
-        self.periwound_edge_color_std[face_idx] = std_color
-    
-
-    
-    
     def extract_connected_components(self, face_set: Set[int], min_faces: int = 10) -> List[Set[int]]:
         """
         Extract connected components from a set of faces.
@@ -2504,56 +2448,6 @@ class WoundModel3DMesh:
 
         return visibility_counts, wound_r_values, wound_prob_values
 
-    def _extract_components_in_face_set(self, face_set: Set[int]) -> List[Set[int]]:
-        """Extract connected components from a face subset using face adjacency."""
-        # Purpose: lightweight BFS component extraction without external dependencies.
-        if not face_set:
-            return []
-
-        unvisited = set(face_set)
-        components = []
-
-        while unvisited:
-            start = next(iter(unvisited))
-            queue = deque([start])
-            component = set()
-
-            while queue:
-                face_idx = queue.popleft()
-                if face_idx not in unvisited:
-                    continue
-                unvisited.remove(face_idx)
-                component.add(face_idx)
-
-                for adj in self.face_adjacency.get(face_idx, []):
-                    if adj in unvisited:
-                        queue.append(adj)
-
-            if component:
-                components.append(component)
-
-        return components
-
-    def _compute_probability_wound_segments(self, wound_prob_threshold: float) -> List[Set[int]]:
-        """Compute connected wound segments from the wound probability map."""
-        # Purpose: derive contiguous high-probability wound candidates for segment-level filtering.
-        if not getattr(self, "semantic_mrf_posteriors", None) and not self.semantic_posteriors:
-            return []
-
-        probability_wound_faces = {
-            face_idx for face_idx in range(len(self.faces))
-            if self._get_face_wound_probability(face_idx) >= wound_prob_threshold
-        }
-
-        return self._extract_components_in_face_set(probability_wound_faces)
-
-    def _is_component_accessible_from_boundary(self, component_faces: Set[int]) -> bool:
-        """Check whether any face in a component touches the outer mesh boundary."""
-        # Purpose: detect enclosed/internal components that may need special handling.
-        if not component_faces:
-            return False
-        boundary_faces = self._get_boundary_faces()
-        return any(face_idx in boundary_faces for face_idx in component_faces)
 
     def _region_grow_within_segment(self, seed_faces: Set[int], segment_faces: Set[int]) -> Set[int]:
         """Region-grow from seed faces while staying inside a target segment."""
@@ -3183,7 +3077,91 @@ class WoundModel3DMesh:
 
         return set(filtered_faces)
 
-    
+    def fit_constrained_healthy_skin_surface(self,
+                                            alpha: float = 1.0,
+                                            beta: float = 1.0,
+                                            gamma: float = 1.0,
+                                            periwound_data_weight: float = 1.0,
+                                            use_cvxpy: bool = False) -> Optional[np.ndarray]:
+        """Fit a healthy-skin reference surface constrained by wound and periwound labels."""
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import fit_constrained_healthy_skin_surface
+
+        healthy_skin_surface = fit_constrained_healthy_skin_surface(
+            self,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            periwound_data_weight=periwound_data_weight,
+            use_cvxpy=use_cvxpy,
+        )
+        return healthy_skin_surface
+
+    def fit_periwound_surface(self,
+                              method: str = "rbf",
+                              voxel_size: Optional[float] = None,
+                              grid_resolution: int = 128,
+                              smoothing: float = 0.0,
+                              spline_degree: int = 3,
+                              return_points: bool = False,
+                              outer_weighting_exponent: float = 0.0,
+                              function_name: str = 'gaussian',
+                              weighting_mode: str = "power",
+                              inner_weight: float = 0.7) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Fit a smooth periwound surface and return the sampled mesh or points."""
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import fit_periwound_surface
+
+        return fit_periwound_surface(
+            self,
+            method=method,
+            voxel_size=voxel_size,
+            grid_resolution=grid_resolution,
+            smoothing=smoothing,
+            spline_degree=spline_degree,
+            return_points=return_points,
+            outer_weighting_exponent=outer_weighting_exponent,
+            function_name=function_name,
+            weighting_mode=weighting_mode,
+            inner_weight=inner_weight,
+        )
+
+    def visualize_healthy_skin_surface(self,
+                                session_path: str = "/analysis/healthy_skin_surface",
+                                spawn: bool = True,
+                                color: Tuple[int, int, int] = (90, 180, 120),
+                                shading_mode: str = 'phong') -> None:
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import  visualize_healthy_skin_surface
+        visualize_healthy_skin_surface(
+            self,
+            session_path=session_path,
+            spawn=spawn,
+            color=color,
+            shading_mode=shading_mode)
+
+    def visualize_healthy_skin_surface_volumes(self,
+                                              session_path: str = "/analysis/healthy_skin_surface_volumes",
+                                              spawn: bool = True,
+                                              visualize_all: bool = True,
+                                              shading_mode: str = 'phong') -> None:
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import visualize_healthy_skin_surface_volumes
+        visualize_healthy_skin_surface_volumes(
+            self,
+            session_path=session_path,
+            spawn=spawn,
+            visualize_all=visualize_all,
+            shading_mode=shading_mode,
+        )
+
+    def visualize_healthy_skin_surface_shell_parts(self,
+                                                   session_path: str = "/analysis/healthy_skin_surface_shell_parts",
+                                                   spawn: bool = True,
+                                                   shading_mode: str = 'phong') -> None:
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import visualize_healthy_skin_surface_shell_parts
+        visualize_healthy_skin_surface_shell_parts(
+            self,
+            session_path=session_path,
+            spawn=spawn,
+            shading_mode=shading_mode,
+        )
     
     def get_wound_mesh(self,
                       min_component_faces: int = 10,
@@ -3251,22 +3229,29 @@ class WoundModel3DMesh:
         self.current_periwound_faces = set(periwound_faces)
         self.periwound_edge_faces = set(periwound_faces)
         self.log_wound(periwound_faces, stage_name="periwound_region")
-        self.compute_wound_edge(filtered_faces)
-        self.log_wound(self.wound_edge_faces, stage_name="wound_edge")
+        self.compute_wound_edge(filtered_faces,periwound_faces=periwound_faces)
+        self.log_wound(self.wound_outerboundary_faces, stage_name="wound_outerboundary")
 
-        # for f_name in ["gaussian", "linear", "multiquadric", "inverse_multiquadric", "thin_plate"]:
-        #     for weight_mode in ["linear_floor", "linear", "sigmoid"]:
-        #         for smoothing in [0.0, 0.1, 0.5]:
-        #             for voxel_size in [1.0, 2.0, 3.0]:
-                        #self.fit_periwound_surface(voxel_size=voxel_size, grid_resolution=100, smoothing=smoothing, outer_weighting_exponent=1.0, function_name=f_name, weighting_mode=weight_mode)
-                        #self.visualize_periwound_surface(session_path=f"/analysis/periwound_surface_{f_name}_voxel{voxel_size:.1f}_smooth{smoothing:.2f}_weight{weight_mode}")
-        self.fit_periwound_surface(voxel_size=1.0, grid_resolution=100, smoothing=0.0, outer_weighting_exponent=0.0, function_name="linear", weighting_mode="linear")
-        self.visualize_periwound_surface(session_path=f"/analysis/periwound_surface_linear_voxel2.0")
+        # Build the healthy-skin reference surface directly from the labeled support mesh.
+        
+        
+        healthy_skin_surface = self.fit_constrained_healthy_skin_surface(
+            # wound_faces=filtered_faces,
+            # periwound_faces=periwound_faces,
+            alpha=1.0,
+            beta=1.0,
+            use_cvxpy=False,
+        )
+        if healthy_skin_surface is not None:
+            print("Healthy-skin reference surface reconstructed from wound/periwound labels")
+            self.visualize_healthy_skin_surface(session_path="/analysis/healthy_skin_surface")
         print(
             f"Periwound segmentation complete: {len(periwound_faces)} faces "
             f"(thickness={self.periwound_thickness}, semantic_support={periwound_use_semantic_candidates})"
         )
 
+
+        
         if not filtered_faces:
             return np.array([]), np.array([]), np.array([])
         
@@ -3454,382 +3439,9 @@ class WoundModel3DMesh:
         
         return n_edges
 
-    def _estimate_periwound_voxel_size(self,
-                                       periwound_points: np.ndarray,
-                                       plane_origin: np.ndarray,
-                                       plane_u: np.ndarray,
-                                       plane_v: np.ndarray,
-                                       voxel_size: Optional[float]) -> Tuple[float, Optional[float]]:
-        """Estimate an aggregation voxel size from the wound boundary scale."""
-        boundary_points = None
 
-        if getattr(self, "vertices", None) is not None:
-            if getattr(self, "wound_edge_vertices", None):
-                vertex_ids = sorted(v for v in self.wound_edge_vertices if 0 <= int(v) < len(self.vertices))
-                if vertex_ids:
-                    boundary_points = np.asarray(self.vertices[vertex_ids], dtype=np.float64)
 
-            if boundary_points is None and getattr(self, "wound_edge_faces", None):
-                face_ids = sorted(f for f in self.wound_edge_faces if 0 <= int(f) < len(self.face_objects))
-                if face_ids:
-                    boundary_points = np.asarray([self.face_objects[f].centroid for f in face_ids], dtype=np.float64)
-
-        if boundary_points is None and getattr(self, "current_periwound_faces", None):
-            periwound_faces = set(self.current_periwound_faces)
-            boundary_face_ids = [
-                face_idx
-                for face_idx in periwound_faces
-                if any(adj not in periwound_faces for adj in self.face_adjacency.get(face_idx, []))
-            ]
-            if boundary_face_ids:
-                boundary_points = np.asarray([self.face_objects[f].centroid for f in boundary_face_ids], dtype=np.float64)
-
-        if boundary_points is None or len(boundary_points) < 2:
-            boundary_points = periwound_points
-
-        if boundary_points is None or len(boundary_points) < 2:
-            base_voxel_size = float(voxel_size) if voxel_size is not None and voxel_size > 0.0 else 1.0
-            return base_voxel_size, None
-
-        rel = boundary_points - plane_origin[None, :]
-        boundary_uv = np.vstack([rel @ plane_u, rel @ plane_v]).T
-        uv_span = np.ptp(boundary_uv, axis=0)
-        wound_diameter = float(np.linalg.norm(uv_span))
-
-        if not np.isfinite(wound_diameter) or wound_diameter <= 0.0:
-            base_voxel_size = float(voxel_size) if voxel_size is not None and voxel_size > 0.0 else 1.0
-            return base_voxel_size, None
-
-        base_voxel_size = float(voxel_size) if voxel_size is not None and voxel_size > 0.0 else 1.0
-        target_voxels_across_wound = 16.0
-        scaled_voxel_size = max((wound_diameter / target_voxels_across_wound) * base_voxel_size, 1e-6)
-        return scaled_voxel_size, wound_diameter
-
-    def fit_periwound_surface(self,
-                              method: str = "rbf",
-                              voxel_size: Optional[float] = None,
-                              grid_resolution: int = 128,
-                              smoothing: float = 0.0,
-                              spline_degree: int = 3,
-                              return_points: bool = False,
-                              outer_weighting_exponent: float = 0.0,
-                              function_name: str = 'gaussian',
-                              weighting_mode: str = "power",
-                              inner_weight: float = 0.7,
-                              ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        """
-        Fit a smooth surface through the current periwound faces and return a mesh or sample points.
-
-        Strategy:
-        - Project periwound face centroids into a fitted local tissue plane (u,v coords).
-        - Fit either an RBF (recommended) or a B-spline-like smooth bivariate surface z(u,v).
-        - Return a dense grid-mesh sampled from the fitted function (vertices, faces) or points.
-
-        Args:
-            method: 'rbf' or 'spline' (falls back to a simple poly fit if SciPy not available)
-            voxel_size: Optional base voxel size for aggregating normals/points before fitting.
-                When wound boundary geometry is available, the effective voxel size
-                is scaled from that boundary size so the aggregation stays proportional
-                to the wound extent.
-            grid_resolution: Grid resolution for sampled output (per axis).
-            smoothing: Regularization/smoothing parameter for spline/rbf where applicable.
-            spline_degree: Degree for bivariate spline when used.
-            return_points: If True, return sampled points instead of a triangulated mesh.
-            outer_weighting_exponent: Controls how much outer periwound faces dominate
-                the surface fit. 0.0 = all faces weighted equally (default).
-                > 0.0 = faces farther from the wound boundary get more influence.
-                The exact mapping depends on `weighting_mode`.
-            function_name: RBF kernel function name passed to scipy RBFInterpolator/Rbf.
-                Options: 'gaussian', 'multiquadric', 'inverse_multiquadric',
-                'thin_plate_spline', 'linear', 'cubic', 'quintic'.
-            weighting_mode: How to convert topological distance to per-face weight.
-                Options:
-                - "power" (default): weight = (d / max_d) ** exponent.
-                  Inner-boundary faces get weight ≈ 0 (clipped to 1e-6).
-                - "linear_floor": weight = inner_weight + (1 - inner_weight) * (d / max_d).
-                  Inner-boundary faces get weight = inner_weight (default 0.5),
-                  outermost faces get weight = 1.0. The exponent parameter is ignored.
-                - "sigmoid": weight = 1 / (1 + exp(-steepness * (d / max_d - midpoint))).
-                  Uses exponent as steepness (default 5.0) and inner_weight as midpoint
-                  (default 0.5). Creates an S-curve transition.
-                - "linear": weight = d / max_d (same as power with exponent=1.0).
-                  Inner-boundary faces get weight ≈ 0.
-            inner_weight: Minimum weight for inner-boundary faces when using
-                "linear_floor" or "sigmoid" modes. Default 0.7 means inner-boundary
-                faces are 70% as important as outer faces.
-
-        Returns:
-            (vertices, faces) mesh tuple or (points, None) if return_points=True. Returns None on failure.
-        """
-        # Validate periwound data
-        periwound_faces = getattr(self, "current_periwound_faces", None)
-        if not periwound_faces:
-            print("fit_periwound_surface: no periwound faces available (run get_wound_mesh first)")
-            return None
-
-        periwound_faces = set(periwound_faces)
-
-        # Collect centroids and normals
-        sorted_pw = sorted(periwound_faces)
-        pts = np.asarray([self.face_objects[f].centroid for f in sorted_pw], dtype=np.float64)
-        normals = np.asarray([self.face_objects[f].face_normal for f in sorted_pw if self.face_objects[f].face_normal is not None], dtype=np.float64)
-        if pts.size == 0:
-            print("fit_periwound_surface: no centroid points available")
-            return None
-
-        # ---- Compute per-face weights from topological distance to wound boundary ----
-        weights = None
-        if outer_weighting_exponent > 0.0:
-            wound_faces = getattr(self, "current_wound_faces", None)
-            if wound_faces is not None and len(wound_faces) > 0:
-                wound_faces = set(wound_faces)
-                # Inner boundary: periwound faces that share an edge with a wound face
-                inner_boundary = set()
-                for f in periwound_faces:
-                    for adj in self.face_adjacency.get(f, []):
-                        if adj in wound_faces:
-                            inner_boundary.add(f)
-                            break
-
-                if inner_boundary:
-                    # BFS from inner boundary through periwound faces to compute topological distance
-                    distance = {f: 0 for f in inner_boundary}
-                    queue = deque(inner_boundary)
-                    while queue:
-                        current = queue.popleft()
-                        for adj in self.face_adjacency.get(current, []):
-                            if adj in periwound_faces and adj not in distance:
-                                distance[adj] = distance[current] + 1
-                                queue.append(adj)
-
-                    # Convert distance to weight using the selected weighting mode
-                    max_dist = max(distance.values()) if distance else 1.0
-                    if max_dist > 0:
-                        raw_d = np.array([
-                            float(distance.get(f, 0)) / max_dist
-                            for f in sorted_pw
-                        ], dtype=np.float64)
-
-                        if weighting_mode == "linear_floor":
-                            # Linear from inner_weight at d=0 to 1.0 at d=1.0
-                            # inner_boundary faces get weight = inner_weight (e.g. 0.5 = 50% importance)
-                            inner_weight = float(np.clip(inner_weight, 0.01, 0.99))
-                            weights = inner_weight + (1.0 - inner_weight) * raw_d
-                            print(
-                                f"  Outer weighting: mode='linear_floor', "
-                                f"inner_weight={inner_weight:.2f}, "
-                                f"inner_boundary_faces={len(inner_boundary)}, "
-                                f"max_distance={max_dist}, "
-                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
-                            )
-
-                        elif weighting_mode == "sigmoid":
-                            # S-curve: smooth transition from low to high weight
-                            steepness = float(outer_weighting_exponent) if outer_weighting_exponent > 0 else 5.0
-                            midpoint = float(np.clip(inner_weight, 0.1, 0.9))
-                            weights = 1.0 / (1.0 + np.exp(-steepness * (raw_d - midpoint)))
-                            # Normalize so max weight = 1.0
-                            weights = weights / (weights.max() + 1e-9)
-                            print(
-                                f"  Outer weighting: mode='sigmoid', "
-                                f"steepness={steepness:.1f}, midpoint={midpoint:.2f}, "
-                                f"inner_boundary_faces={len(inner_boundary)}, "
-                                f"max_distance={max_dist}, "
-                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
-                            )
-
-                        elif weighting_mode == "linear":
-                            # Simple linear: weight = d / max_d
-                            weights = raw_d.copy()
-                            weights = np.clip(weights, 1e-6, 1.0)
-                            print(
-                                f"  Outer weighting: mode='linear', "
-                                f"inner_boundary_faces={len(inner_boundary)}, "
-                                f"max_distance={max_dist}, "
-                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
-                            )
-
-                        else:  # "power" (default)
-                            # Power scaling: weight = (d / max_d) ** exponent
-                            weights = raw_d ** outer_weighting_exponent
-                            weights = np.clip(weights, 1e-6, 1.0)
-                            print(
-                                f"  Outer weighting: mode='power', "
-                                f"exponent={outer_weighting_exponent}, "
-                                f"inner_boundary_faces={len(inner_boundary)}, "
-                                f"max_distance={max_dist}, "
-                                f"weight_range=[{weights.min():.4f}, {weights.max():.4f}]"
-                            )
-                else:
-                    print("  Warning: no inner boundary faces found, using uniform weights")
-            else:
-                print("  Warning: no wound faces available for distance weighting, using uniform weights")
-
-        # Fit local plane and build local coordinate system
-        plane_normal, plane_d = self._fit_plane(pts, face_normals=normals if normals.size > 0 else None)
-        origin = -plane_d * plane_normal
-        # Create orthonormal basis (u, v, n)
-        n = plane_normal / (np.linalg.norm(plane_normal) + 1e-9)
-        # pick arbitrary vector not parallel to n
-        a = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        if abs(np.dot(a, n)) > 0.9:
-            a = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        u = np.cross(n, a)
-        u /= (np.linalg.norm(u) + 1e-9)
-        v = np.cross(n, u)
-        v /= (np.linalg.norm(v) + 1e-9)
-
-        # Local coordinates (u_coord, v_coord) and heights (z)
-        rel = pts - origin[None, :]
-        uv = np.vstack([rel @ u, rel @ v]).T
-        z = (rel @ n).ravel()
-
-        effective_voxel_size, wound_diameter = self._estimate_periwound_voxel_size(
-            periwound_points=pts,
-            plane_origin=origin,
-            plane_u=u,
-            plane_v=v,
-            voxel_size=voxel_size,
-        )
-        if wound_diameter is not None:
-            print(
-                f"fit_periwound_surface: wound diameter ~ {wound_diameter:.4f}, "
-                f"voxel_size -> {effective_voxel_size:.4f}"
-            )
-
-        # Optional voxelization/aggregation of points and normals
-        if effective_voxel_size is not None and effective_voxel_size > 0.0:
-            # voxelize in uv plane
-            vox_idx = np.floor(uv / float(effective_voxel_size)).astype(np.int64)
-            keys = [tuple(k) for k in vox_idx.tolist()]
-            agg = {}
-            for i, k in enumerate(keys):
-                if k not in agg:
-                    agg[k] = {'uv': [], 'z': [], 'n': [], 'w': []}
-                agg[k]['uv'].append(uv[i])
-                agg[k]['z'].append(z[i])
-                if i < len(normals):
-                    agg[k]['n'].append(normals[i])
-                if weights is not None:
-                    agg[k]['w'].append(weights[i])
-
-            uv_list = []
-            z_list = []
-            weights_list = []
-            for k, vdata in agg.items():
-                uv_list.append(np.mean(vdata['uv'], axis=0))
-                z_list.append(np.mean(vdata['z'], axis=0))
-                if vdata['w']:
-                    weights_list.append(np.mean(vdata['w'], axis=0))
-            uv = np.asarray(uv_list, dtype=np.float64)
-            z = np.asarray(z_list, dtype=np.float64)
-            if weights_list:
-                weights = np.asarray(weights_list, dtype=np.float64)
-                print(f"  Voxelization aggregated weights: {len(weights)} points, range=[{weights.min():.4f}, {weights.max():.4f}]")
-
-        # Choose fitting backend: try SciPy RBF / SmoothBivariateSpline
-        fitted = None
-        function_name = function_name
-        try:
-            if method == 'rbf':
-                if weights is not None and outer_weighting_exponent > 0.0:
-                    # Use RBFInterpolator which supports per-point smoothing (weights)
-                    try:
-                        from scipy.interpolate import RBFInterpolator
-                        # Convert weights to smoothing: higher weight = less smoothing (trust more)
-                        # Invert so outer faces (high weight) get low smoothing, inner faces get high smoothing
-                        per_point_smoothing = float(smoothing) * (1.0 - weights) + 1e-9
-                        rbf = RBFInterpolator(
-                            uv, z[:, None],
-                            kernel=function_name,
-                            smoothing=per_point_smoothing,
-                        )
-                        def evaluator(xi, yi):
-                            xi_arr = np.asarray(xi).ravel()
-                            yi_arr = np.asarray(yi).ravel()
-                            pts = np.column_stack([xi_arr, yi_arr])
-                            return rbf(pts).ravel().reshape(xi.shape)
-                        fitted = evaluator
-                        print(f"  Using RBFInterpolator with per-point smoothing (weight range: [{weights.min():.4f}, {weights.max():.4f}])")
-                    except (ImportError, AttributeError):
-                        # Fall back to legacy Rbf (no per-point weights)
-                        from scipy.interpolate import Rbf
-                        rbf = Rbf(uv[:, 0], uv[:, 1], z, function=function_name, smooth=float(smoothing))
-                        def evaluator(xi, yi):
-                            return rbf(xi, yi)
-                        fitted = evaluator
-                        print("  RBFInterpolator not available, using legacy Rbf (weights not applied)")
-                else:
-                    from scipy.interpolate import Rbf
-                    rbf = Rbf(uv[:, 0], uv[:, 1], z, function=function_name, smooth=float(smoothing))
-                    def evaluator(xi, yi):
-                        return rbf(xi, yi)
-                    fitted = evaluator
-            elif method == 'spline':
-                from scipy.interpolate import SmoothBivariateSpline
-                s = float(smoothing) if smoothing is not None else 0.0
-                spline = SmoothBivariateSpline(uv[:, 0], uv[:, 1], z, kx=spline_degree, ky=spline_degree, s=s)
-                def evaluator(xi, yi):
-                    return spline.ev(xi, yi)
-                fitted = evaluator
-        except Exception:
-            # SciPy not available or failed -> fallback to weighted quadratic polynomial least-squares
-            A = np.vstack([np.ones(len(uv)), uv[:, 0], uv[:, 1], uv[:, 0] ** 2, uv[:, 0] * uv[:, 1], uv[:, 1] ** 2]).T
-            if weights is not None and outer_weighting_exponent > 0.0:
-                # Weighted least-squares: minimize sum(w_i * (A_i @ coeffs - z_i)^2)
-                W = np.diag(weights)
-                coeffs = np.linalg.lstsq(A.T @ W @ A, A.T @ W @ z, rcond=None)[0]
-                print(f"  Using weighted polynomial least-squares")
-            else:
-                coeffs, *_ = np.linalg.lstsq(A, z, rcond=None)
-            def evaluator(xi, yi):
-                xi = np.asarray(xi)
-                yi = np.asarray(yi)
-                xi_flat = xi.ravel()
-                yi_flat = yi.ravel()
-                X = np.vstack([np.ones_like(xi_flat), xi_flat, yi_flat, xi_flat ** 2, xi_flat * yi_flat, yi_flat ** 2])
-                zz = (coeffs @ X).reshape(xi.shape)
-                return zz
-            fitted = evaluator
-
-        # Build grid in uv space covering data (with small padding)
-        pad_u = max(1e-3, (uv[:, 0].max() - uv[:, 0].min()) * 0.05)
-        pad_v = max(1e-3, (uv[:, 1].max() - uv[:, 1].min()) * 0.05)
-        u_min, u_max = uv[:, 0].min() - pad_u, uv[:, 0].max() + pad_u
-        v_min, v_max = uv[:, 1].min() - pad_v, uv[:, 1].max() + pad_v
-
-        gx = np.linspace(u_min, u_max, int(max(3, grid_resolution)))
-        gy = np.linspace(v_min, v_max, int(max(3, grid_resolution)))
-        GX, GY = np.meshgrid(gx, gy)
-        GZ = fitted(GX, GY)
-
-        # Convert grid back to 3D points
-        flat_uvx = GX.ravel()
-        flat_uvy = GY.ravel()
-        flat_z = GZ.ravel()
-        vert_xyz = origin[None, :] + np.outer(flat_uvx, u) + np.outer(flat_uvy, v) + np.outer(flat_z, n)
-
-        if return_points:
-            self.periwound_surface_points = vert_xyz.reshape(-1, 3)
-            return self.periwound_surface_points, None
-
-        # Build faces from grid quads
-        nx = len(gx)
-        ny = len(gy)
-        verts = vert_xyz.reshape(ny * nx, 3)
-        faces_idx = []
-        for iy in range(ny - 1):
-            for ix in range(nx - 1):
-                a = iy * nx + ix
-                b = a + 1
-                c = a + nx
-                d = c + 1
-                faces_idx.append([a, b, c])
-                faces_idx.append([b, d, c])
-
-        faces_idx = np.asarray(faces_idx, dtype=np.int32)
-        self.periwound_surface_mesh = (verts, faces_idx)
-        return verts, faces_idx
+    
 
     def visualize_periwound_surface(self,
                                      session_path: str = "/analysis/periwound_surface",
@@ -3895,6 +3507,8 @@ class WoundModel3DMesh:
 
         except Exception as exc:
             print(f"visualize_periwound_surface: failed to log: {exc}")
+
+ 
     
     def _fill_mesh_holes(self, vertices: np.ndarray, faces: np.ndarray, 
                         colors: np.ndarray = None, hole_size: float = -1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -3949,9 +3563,106 @@ class WoundModel3DMesh:
             traceback.print_exc()
             return vertices, faces, colors
 
-    # =========================================================================
-    # NEW FUNCTION: Detect outer boundary of periwound faces and remove outside faces
-    # =========================================================================
+    def extract_periwound_trimmed_mesh(self,
+                                       periwound_threshold: float = 0.1,
+                                       wound_threshold: float = 0.0) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+        """
+        Extract a submesh that is trimmed to the periwound outer boundary.
+
+        Works directly after `process_periwound_face_detection()` by deriving
+        periwound faces from the `r_periwound` visibility ratios (no need to
+        run the full semantic classification first).
+
+        The function:
+        1. Selects periwound faces based on `r_periwound > periwound_threshold`
+           (and optionally wound faces based on `r_wound > wound_threshold`).
+        2. Calls `trim_mesh_to_periwound_boundary()` to flood-fill from the mesh
+           outer boundary and remove everything outside the periwound ring.
+        3. Extracts the compact submesh via `extract_submesh_from_faces()`.
+
+        Args:
+            periwound_threshold: Minimum r_periwound value for a face to be
+                considered part of the periwound region (default: 0.1).
+            wound_threshold: Minimum r_wound value for a face to be treated as
+                blocking the flood-fill (default: 0.0 — disabled). Set to e.g.
+                0.3 to also treat high-confidence wound faces as blocking.
+
+        Returns:
+            Tuple of (vertices, faces, colors) for the trimmed mesh.
+        """
+        # --- Derive periwound faces from visibility ratios if not already set ---
+        periwound_faces = getattr(self, "current_periwound_faces", None)
+        if periwound_faces is None or len(periwound_faces) == 0:
+            # No semantic periwound mask yet — use r_periwound threshold directly
+            periwound_faces = set()
+            for face_obj in self.face_objects:
+                if face_obj.r_periwound is not None and float(face_obj.r_periwound) > periwound_threshold:
+                    periwound_faces.add(face_obj.face_index)
+            if not periwound_faces:
+                print("extract_periwound_trimmed_mesh: no periwound faces found from r_periwound data")
+                return np.array([]), np.array([]), None
+            print(f"extract_periwound_trimmed_mesh: derived {len(periwound_faces)} periwound faces from r_periwound > {periwound_threshold}")
+
+        # --- Optionally derive wound faces from r_wound ---
+        wound_faces = getattr(self, "current_wound_faces", set())
+        if wound_threshold > 0.0 and len(wound_faces) == 0:
+            wound_faces = set()
+            for face_obj in self.face_objects:
+                if face_obj.r_wound is not None and float(face_obj.r_wound) > wound_threshold:
+                    wound_faces.add(face_obj.face_index)
+            if wound_faces:
+                print(f"extract_periwound_trimmed_mesh: derived {len(wound_faces)} wound faces from r_wound > {wound_threshold}")
+
+        kept_faces = self.trim_mesh_to_periwound_boundary(
+            periwound_faces=periwound_faces,
+            wound_faces=wound_faces if wound_faces else None,
+            return_removed_faces=False,
+        )
+        if not kept_faces:
+            print("extract_periwound_trimmed_mesh: no faces kept, returning empty mesh")
+            return np.array([]), np.array([]), None
+
+        kept_faces = self._select_best_component_face_set(
+            kept_faces,
+            min_faces=50,
+            use_wound_periwound_scores=True,
+            stage_name="extract_periwound_trimmed_mesh",
+        )
+
+        print(f"Extracting trimmed mesh with {len(kept_faces)} faces...")
+        vertices, faces, colors = self.extract_submesh_from_faces(kept_faces)
+        print(f"Trimmed mesh: {len(vertices)} vertices, {len(faces)} faces")
+        return vertices, faces, colors
+
+    def save_wound_mesh(self, output_path: Path, vertices: np.ndarray = None,
+                       faces: np.ndarray = None, colors: np.ndarray = None):
+        """
+        Save mesh to PLY file.
+
+        Args:
+            output_path: Output PLY file path
+            vertices: Vertex array (N, 3)
+            faces: Face array (M, 3)
+            colors: Optional color array (N, 3)
+        """
+        import open3d as o3d
+        output_path = Path(output_path)
+        print(f"Saving mesh to: {output_path}")
+
+        try:
+            mesh = o3d.geometry.TriangleMesh()
+            mesh.vertices = o3d.utility.Vector3dVector(vertices.astype(np.float64))
+            mesh.triangles = o3d.utility.Vector3iVector(faces.astype(np.int32))
+            if colors is not None:
+                colors_01 = colors / 255.0 if np.max(colors) > 1.0 else colors.copy()
+                mesh.vertex_colors = o3d.utility.Vector3dVector(np.clip(colors_01, 0.0, 1.0))
+            mesh.compute_vertex_normals()
+            o3d.io.write_triangle_mesh(str(output_path), mesh)
+            print("Saved mesh successfully")
+
+        except ImportError:
+            print("Open3D not available for mesh export")
+
     def trim_mesh_to_periwound_boundary(self,
                                         periwound_faces: Optional[Set[int]] = None,
                                         wound_faces: Optional[Set[int]] = None,
@@ -4087,101 +3798,8 @@ class WoundModel3DMesh:
             return kept_faces, removed_faces
         return kept_faces
 
-    def extract_periwound_trimmed_mesh(self,
-                                       periwound_threshold: float = 0.1,
-                                       wound_threshold: float = 0.0) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-        """
-        Extract a submesh that is trimmed to the periwound outer boundary.
 
-        Works directly after `process_periwound_face_detection()` by deriving
-        periwound faces from the `r_periwound` visibility ratios (no need to
-        run the full semantic classification first).
-
-        The function:
-        1. Selects periwound faces based on `r_periwound > periwound_threshold`
-           (and optionally wound faces based on `r_wound > wound_threshold`).
-        2. Calls `trim_mesh_to_periwound_boundary()` to flood-fill from the mesh
-           outer boundary and remove everything outside the periwound ring.
-        3. Extracts the compact submesh via `extract_submesh_from_faces()`.
-
-        Args:
-            periwound_threshold: Minimum r_periwound value for a face to be
-                considered part of the periwound region (default: 0.1).
-            wound_threshold: Minimum r_wound value for a face to be treated as
-                blocking the flood-fill (default: 0.0 — disabled). Set to e.g.
-                0.3 to also treat high-confidence wound faces as blocking.
-
-        Returns:
-            Tuple of (vertices, faces, colors) for the trimmed mesh.
-        """
-        # --- Derive periwound faces from visibility ratios if not already set ---
-        periwound_faces = getattr(self, "current_periwound_faces", None)
-        if periwound_faces is None or len(periwound_faces) == 0:
-            # No semantic periwound mask yet — use r_periwound threshold directly
-            periwound_faces = set()
-            for face_obj in self.face_objects:
-                if face_obj.r_periwound is not None and float(face_obj.r_periwound) > periwound_threshold:
-                    periwound_faces.add(face_obj.face_index)
-            if not periwound_faces:
-                print("extract_periwound_trimmed_mesh: no periwound faces found from r_periwound data")
-                return np.array([]), np.array([]), None
-            print(f"extract_periwound_trimmed_mesh: derived {len(periwound_faces)} periwound faces from r_periwound > {periwound_threshold}")
-
-        # --- Optionally derive wound faces from r_wound ---
-        wound_faces = getattr(self, "current_wound_faces", set())
-        if wound_threshold > 0.0 and len(wound_faces) == 0:
-            wound_faces = set()
-            for face_obj in self.face_objects:
-                if face_obj.r_wound is not None and float(face_obj.r_wound) > wound_threshold:
-                    wound_faces.add(face_obj.face_index)
-            if wound_faces:
-                print(f"extract_periwound_trimmed_mesh: derived {len(wound_faces)} wound faces from r_wound > {wound_threshold}")
-
-        kept_faces = self.trim_mesh_to_periwound_boundary(
-            periwound_faces=periwound_faces,
-            wound_faces=wound_faces if wound_faces else None,
-            return_removed_faces=False,
-        )
-        if not kept_faces:
-            print("extract_periwound_trimmed_mesh: no faces kept, returning empty mesh")
-            return np.array([]), np.array([]), None
-
-        print(f"Extracting trimmed mesh with {len(kept_faces)} faces...")
-        vertices, faces, colors = self.extract_submesh_from_faces(kept_faces)
-        print(f"Trimmed mesh: {len(vertices)} vertices, {len(faces)} faces")
-        return vertices, faces, colors
-
-    def save_wound_mesh(self, output_path: Path, vertices: np.ndarray = None,
-                       faces: np.ndarray = None, colors: np.ndarray = None):
-        """
-        Save mesh to PLY file.
-
-        Args:
-            output_path: Output PLY file path
-            vertices: Vertex array (N, 3)
-            faces: Face array (M, 3)
-            colors: Optional color array (N, 3)
-        """
-        import open3d as o3d
-        output_path = Path(output_path)
-        print(f"Saving mesh to: {output_path}")
-
-        try:
-            mesh = o3d.geometry.TriangleMesh()
-            mesh.vertices = o3d.utility.Vector3dVector(vertices.astype(np.float64))
-            mesh.triangles = o3d.utility.Vector3iVector(faces.astype(np.int32))
-            if colors is not None:
-                colors_01 = colors / 255.0 if np.max(colors) > 1.0 else colors.copy()
-                mesh.vertex_colors = o3d.utility.Vector3dVector(np.clip(colors_01, 0.0, 1.0))
-            mesh.compute_vertex_normals()
-            o3d.io.write_triangle_mesh(str(output_path), mesh)
-            print("Saved mesh successfully")
-
-        except ImportError:
-            print("Open3D not available for mesh export")
-
-
-def MeshReduction(mesh_path: str, model_path: Path, mask_dir: Path, extruded_mask_dir: Path, decimation_threshold: float = 0.7)-> Path:
+def MeshReduction(mesh_path: str, model_path: Path, mask_dir: Path, extruded_mask_dir: Path, )-> Path:
     # Initialize model
         wound_model = WoundModel3DMesh()
         
