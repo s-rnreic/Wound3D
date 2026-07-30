@@ -299,6 +299,17 @@ class WoundModel3DMesh:
         self.debug_confidence_face_values = {}
         self.debug_wound_posterior_map = {}
         self.debug_tissue_posterior_map = {}
+
+        # Surface reconstruction caches.
+        self.periwound_surface_mesh = None
+        self.constrained_healthy_skin_surface_mesh = None
+        self.constrained_healthy_skin_surface_frame = None
+        self.constrained_healthy_skin_surface_solution = None
+        self.constrained_healthy_skin_surface_data = None
+        self.constrained_healthy_skin_surface_combined_mesh = None
+        self.constrained_healthy_skin_surface_volume = None
+        self.constrained_healthy_skin_surface_volume_components = None
+        self.constrained_healthy_skin_surface_volume_mesh = None
     
     def load_mesh(self, mesh_path: Path, compute_normals: bool = True):
         """
@@ -331,6 +342,18 @@ class WoundModel3DMesh:
 
         # Build mesh topology
         self._compute_mesh_topology()
+
+        # Keep the best connected component when the loaded mesh has multiple
+        # reasonably sized fragments.
+        selected_component = self._select_best_component_face_set(
+            set(range(len(self.faces))) if self.faces is not None else set(),
+            min_faces=50,
+            use_wound_periwound_scores=False,
+            stage_name="load_mesh",
+        )
+        if selected_component and len(selected_component) < len(self.faces):
+            print(f"load_mesh: rebuilding mesh from selected component with {len(selected_component)} faces")
+            self._rebuild_mesh_from_face_set(selected_component, compute_normals=compute_normals)
 
         # Build per-face data containers once geometry and adjacency are available.
         self._initialize_face_objects()
@@ -410,6 +433,85 @@ class WoundModel3DMesh:
                     face_obj.visibility_periwound = int(face_obj.visibility_periwound or 0) + 1
                 elif class_name == "tissue":
                     face_obj.visibility_tissue = int(face_obj.visibility_tissue or 0) + 1
+
+    def _score_mesh_component(self, component_faces: Set[int], use_wound_periwound_scores: bool = False) -> Tuple[float, float, float, float]:
+        """Score a connected mesh component for selection among competing fragments."""
+        if not component_faces:
+            return 0.0, 0.0, 0.0, 0.0
+
+        face_count = float(len(component_faces))
+        if not use_wound_periwound_scores or not self.face_objects:
+            return face_count, 0.0, 0.0, 0.0
+
+        wound_score = 0.0
+        periwound_score = 0.0
+        for face_idx in component_faces:
+            if 0 <= face_idx < len(self.face_objects):
+                face_obj = self.face_objects[face_idx]
+                wound_score += float(face_obj.r_wound or 0.0)
+                periwound_score += float(face_obj.r_periwound or 0.0)
+
+        return face_count, wound_score + periwound_score, wound_score, periwound_score
+
+    def _select_best_component_face_set(self,
+                                        face_set: Set[int],
+                                        min_faces: int = 50,
+                                        use_wound_periwound_scores: bool = False,
+                                        stage_name: str = "mesh") -> Set[int]:
+        """Select the best connected component from a face subset.
+
+        Components smaller than ``min_faces`` are ignored. When multiple valid
+        components remain, the largest one is selected first; ties are broken by
+        the amount of wound/periwound evidence when available.
+        """
+        if not face_set:
+            return set()
+
+        components = self.extract_connected_components(face_set, min_faces=min_faces)
+        if len(components) <= 1:
+            if len(components) == 1:
+                print(f"{stage_name}: mesh has one component with at least {min_faces} faces")
+                return set(next(iter(components)))
+
+            print(f"{stage_name}: no connected components with at least {min_faces} faces were found")
+            return set(face_set)
+
+        ranked_components = sorted(
+            components,
+            key=lambda comp: self._score_mesh_component(comp, use_wound_periwound_scores=use_wound_periwound_scores),
+            reverse=True,
+        )
+        selected_component = set(ranked_components[0])
+        selected_score = self._score_mesh_component(
+            selected_component,
+            use_wound_periwound_scores=use_wound_periwound_scores,
+        )
+
+        print(
+            f"{stage_name}: found {len(components)} mesh components with at least {min_faces} faces; "
+            f"keeping component with {len(selected_component)} faces and score={selected_score}"
+        )
+        return selected_component
+
+    def _rebuild_mesh_from_face_set(self, face_set: Set[int], compute_normals: bool = True) -> None:
+        """Rebuild ``self.mesh`` from a selected global face subset."""
+        import open3d as o3d
+
+        vertices, faces, colors = self.extract_submesh_from_faces(face_set)
+        rebuilt_mesh = o3d.geometry.TriangleMesh()
+        rebuilt_mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        rebuilt_mesh.triangles = o3d.utility.Vector3iVector(faces)
+
+        if colors is not None:
+            rebuilt_mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+
+        if compute_normals and len(vertices) > 0 and len(faces) > 0:
+            rebuilt_mesh.compute_vertex_normals()
+            rebuilt_mesh.compute_triangle_normals()
+
+        self.mesh = rebuilt_mesh
+        self._sync_arrays_from_mesh()
+        self._compute_mesh_topology()
 
 
     
