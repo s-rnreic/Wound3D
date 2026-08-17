@@ -392,13 +392,13 @@ def visualize_final_wound_and_measurements(
         static=True,
     )
 
-    # Optionally log wound edge vertices as points
-    edge_vertices = getattr(wound_model, "wound_edge_vertices", None)
+    # Optionally log wound outerboundary vertices as points
+    edge_vertices = getattr(wound_model, "wound_outerboundary_vertices", None)
     if edge_vertices:
         ev = np.asarray(list(edge_vertices), dtype=np.int64)
         if ev.size > 0:
             points = np.asarray(wound_model.vertices)[ev]
-            rr.log("/analysis/final_wound_edge_vertices", rr.Points3D(positions=np.ascontiguousarray(points, dtype=np.float64), colors=np.tile(np.array([[255, 0, 0]], dtype=np.uint8), (len(points), 1))), static=True)
+            rr.log("/analysis/final_wound_outerboundary_vertices", rr.Points3D(positions=np.ascontiguousarray(points, dtype=np.float64), colors=np.tile(np.array([[255, 0, 0]], dtype=np.uint8), (len(points), 1))), static=True)
 
 
 def visualize_wound_assessment_rerun(

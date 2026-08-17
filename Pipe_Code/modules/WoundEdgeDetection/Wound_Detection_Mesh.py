@@ -260,6 +260,13 @@ class WoundModel3DMesh:
         self.spectators = {}  # Dict: image_name -> Spectator
         self.cameras = {}
         self.images = {}
+        
+        # Normal tissue tracking (healthy tissue unaffected by wound - from undistorted mask difference)
+        self.normal_tissue_face_indices = set()  # Faces detected in normal tissue region
+        self.normal_tissue_visibility_count = {}  # face_idx -> count of cameras seeing normal tissue
+
+        # Semantic classification (feature-based confidence)
+        self.semantic_feature_names = []  # List of feature names
         self.semantic_face_indices = []  # Faces used for semantic classification
         self.semantic_features = None  # (N, D) feature matrix for semantic classification
         self.semantic_posteriors = {}  # face_idx -> np.array([p_periwound, p_wound])
@@ -275,6 +282,16 @@ class WoundModel3DMesh:
         self.current_wound_faces = set()  # Current wound face indices after filtering
         self.current_periwound_faces = set()  # Current periwound face indices after filtering
         self.periwound_thickness = 2  # Number of adjacency layers used for the periwound shell
+        self.wound_outerboundary_edges = []  # Edges on the wound region outer boundary
+        self.wound_outerboundary_vertices = set()  # Vertices used by the wound outer boundary
+        self.wound_outerboundary_faces = set()  # Wound faces touching the outer boundary
+        self.wound_outerboundary_bridge_edges = []  # Edges inferred to close small gaps in the outer boundary
+        self.wound_outerboundary_is_closed = False  # True when the outer boundary is a closed loop
+        self.wound_outerboundary_open_endpoints = set()  # Open contour endpoints before/after repair
+        self.periwound_innerboundary_edges = []  # Secondary fallback boundary between wound and periwound
+        self.periwound_innerboundary_vertices = set()  # Vertices used by the periwound inner boundary
+        self.periwound_innerboundary_faces = set()  # Periwound faces touching the inner boundary
+        self.periwound_innerboundary_is_continuous = False  # True when fallback inner boundary is one continuous path
         
 
         # Model state
@@ -2252,27 +2269,337 @@ class WoundModel3DMesh:
         
         return submesh_vertices, submesh_faces, submesh_colors
 
-    def compute_wound_edge(self, wound_faces: Set[int]) -> None:
-        """Compute wound edge edges and vertices from wound/non-wound boundary."""
-        # Purpose: capture the geometric wound contour as boundary edges for later measurement/visualization.
-        self.wound_edge_edges = []
-        self.wound_edge_vertices = set()
-        self.wound_edge_faces = set()
+    def _build_mesh_vertex_graph(self):
+        """Build a weighted vertex graph from the full mesh triangles."""
+        try:
+            import networkx as nx
+        except ImportError:
+            return None
+
+        if self.faces is None or self.vertices is None:
+            return nx.Graph()
+
+        graph = nx.Graph()
+        vertices = np.asarray(self.vertices, dtype=np.float64)
+        faces = np.asarray(self.faces, dtype=np.int64)
+
+        for face in faces:
+            if len(face) < 3:
+                continue
+            face_vertices = [int(face[0]), int(face[1]), int(face[2])]
+            for start, end in ((face_vertices[0], face_vertices[1]),
+                               (face_vertices[1], face_vertices[2]),
+                               (face_vertices[2], face_vertices[0])):
+                if start == end:
+                    continue
+                weight = float(np.linalg.norm(vertices[start] - vertices[end]))
+                graph.add_edge(start, end, weight=weight)
+
+        return graph
+
+    def _repair_wound_boundary_edges(self, boundary_edges: List[Tuple[int, int]]) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]], bool, Set[int]]:
+        """Check whether a wound boundary is closed and bridge small gaps if needed."""
+        try:
+            import networkx as nx
+        except ImportError:
+            unique_edges = sorted({tuple(sorted((int(a), int(b)))) for a, b in boundary_edges})
+            return unique_edges, [], False, set()
+
+        if not boundary_edges:
+            return [], [], True, set()
+
+        boundary_graph = nx.Graph()
+        normalized_boundary_edges = [tuple(sorted((int(a), int(b)))) for a, b in boundary_edges]
+        boundary_graph.add_edges_from(normalized_boundary_edges)
+
+        mesh_graph = self._build_mesh_vertex_graph()
+        if mesh_graph is None or mesh_graph.number_of_edges() == 0:
+            return sorted(set(normalized_boundary_edges)), [], False, set()
+
+        mesh_edge_lengths = [float(data.get("weight", 1.0)) for _, _, data in mesh_graph.edges(data=True)]
+        median_mesh_edge_length = float(np.median(mesh_edge_lengths)) if mesh_edge_lengths else 1.0
+
+        repaired_edges = set(normalized_boundary_edges)
+        bridge_edges: List[Tuple[int, int]] = []
+        open_endpoints: Set[int] = set()
+
+        # Each connected component should either be a closed cycle (all degree 2)
+        # or an open chain with exactly two endpoints. If it is open, bridge the
+        # smallest missing gap using the mesh vertex graph.
+        for component_nodes in nx.connected_components(boundary_graph):
+            component = boundary_graph.subgraph(component_nodes)
+            degrees = dict(component.degree())
+            endpoints = [int(v) for v, degree in degrees.items() if degree == 1]
+
+            if not endpoints:
+                continue
+
+            open_endpoints.update(endpoints)
+            remaining_endpoints = set(endpoints)
+            component_edge_count = max(int(component.number_of_edges()), 1)
+            max_bridge_hops = max(6, min(25, int(np.ceil(component_edge_count * 0.15))))
+
+            while len(remaining_endpoints) >= 2:
+                best_pair = None
+                best_path = None
+                best_weight = None
+
+                sorted_endpoints = sorted(remaining_endpoints)
+                for index, start in enumerate(sorted_endpoints):
+                    for end in sorted_endpoints[index + 1:]:
+                        try:
+                            path = nx.shortest_path(mesh_graph, start, end, weight="weight")
+                            path_weight = float(nx.shortest_path_length(mesh_graph, start, end, weight="weight"))
+                        except nx.NetworkXNoPath:
+                            continue
+
+                        if best_weight is None or path_weight < best_weight:
+                            best_pair = (start, end)
+                            best_path = path
+                            best_weight = path_weight
+
+                if best_pair is None or best_path is None or best_weight is None:
+                    break
+
+                straight_line = float(np.linalg.norm(
+                    np.asarray(self.vertices[best_pair[0]], dtype=np.float64)
+                    - np.asarray(self.vertices[best_pair[1]], dtype=np.float64)
+                )) if self.vertices is not None else 0.0
+                max_allowed_weight = max(
+                    2.5 * max(straight_line, median_mesh_edge_length),
+                    float(max_bridge_hops) * median_mesh_edge_length * 1.5,
+                )
+                path_hops = len(best_path) - 1
+
+                if path_hops > max_bridge_hops or best_weight > max_allowed_weight:
+                    break
+
+                for start_vertex, end_vertex in zip(best_path[:-1], best_path[1:]):
+                    edge = tuple(sorted((int(start_vertex), int(end_vertex))))
+                    if edge not in repaired_edges:
+                        repaired_edges.add(edge)
+                        bridge_edges.append(edge)
+
+                remaining_endpoints.discard(best_pair[0])
+                remaining_endpoints.discard(best_pair[1])
+
+        repaired_graph = nx.Graph()
+        repaired_graph.add_edges_from(repaired_edges)
+        is_closed = True
+        for component_nodes in nx.connected_components(repaired_graph):
+            component = repaired_graph.subgraph(component_nodes)
+            if component.number_of_edges() == 0:
+                continue
+            if any(degree != 2 for degree in dict(component.degree()).values()):
+                is_closed = False
+                break
+
+        return sorted(repaired_edges), bridge_edges, is_closed, open_endpoints
+
+    def _order_boundary_edges(self, boundary_edges: List[Tuple[int, int]]) -> Tuple[List[Tuple[int, int]], List[int], bool, Set[int]]:
+        """Order boundary edges into a continuous walk around the largest component."""
+        try:
+            import networkx as nx
+        except ImportError:
+            normalized = sorted({tuple(sorted((int(a), int(b)))) for a, b in boundary_edges})
+            boundary_vertices = sorted({int(v) for edge in normalized for v in edge})
+            return normalized, boundary_vertices, False, set()
+
+        normalized = [tuple(sorted((int(a), int(b)))) for a, b in boundary_edges]
+        if not normalized:
+            return [], [], True, set()
+
+        graph = nx.Graph()
+        graph.add_edges_from(normalized)
+        if graph.number_of_edges() == 0:
+            return [], [], True, set()
+
+        components = [graph.subgraph(nodes).copy() for nodes in nx.connected_components(graph)]
+        component = max(components, key=lambda g: (g.number_of_edges(), g.number_of_nodes()))
+        degrees = dict(component.degree())
+        endpoints = [int(vertex) for vertex, degree in degrees.items() if degree == 1]
+        start_vertex = endpoints[0] if endpoints else int(next(iter(component.nodes())))
+
+        ordered_edges: List[Tuple[int, int]] = []
+        ordered_vertices: List[int] = [start_vertex]
+        visited_edges: Set[Tuple[int, int]] = set()
+        current_vertex = start_vertex
+        previous_vertex = None
+
+        while True:
+            next_vertices = [
+                int(neighbor)
+                for neighbor in component.neighbors(current_vertex)
+                if tuple(sorted((int(current_vertex), int(neighbor)))) not in visited_edges
+                and int(neighbor) != previous_vertex
+            ]
+
+            if not next_vertices:
+                if not endpoints and current_vertex != start_vertex:
+                    closing_edge = tuple(sorted((int(current_vertex), int(start_vertex))))
+                    if closing_edge in component.edges:
+                        ordered_edges.append(closing_edge)
+                        ordered_vertices.append(start_vertex)
+                        visited_edges.add(closing_edge)
+                break
+
+            next_vertex = next_vertices[0]
+            edge = tuple(sorted((int(current_vertex), int(next_vertex))))
+            visited_edges.add(edge)
+            ordered_edges.append(edge)
+            ordered_vertices.append(int(next_vertex))
+            previous_vertex = current_vertex
+            current_vertex = int(next_vertex)
+
+            if not endpoints and current_vertex == start_vertex:
+                break
+
+            if len(visited_edges) >= component.number_of_edges():
+                break
+
+        is_closed = bool(ordered_vertices and ordered_vertices[0] == ordered_vertices[-1])
+        return ordered_edges, ordered_vertices, is_closed, set(endpoints)
+
+    def compute_wound_edge(
+        self,
+        wound_faces: Set[int],
+        periwound_faces: Optional[Set[int]] = None,
+        use_submesh_boundary: bool = True,
+    ) -> None:
+        """Compute wound outer boundary and optionally build periwound fallback when fragmented.
+
+        Args:
+            wound_faces: Selected wound faces (global face indices).
+            periwound_faces: Optional periwound faces for fallback boundary.
+            use_submesh_boundary: If True, compute the outer boundary from a wound-only
+                submesh edge count (boundary edges appear once). If False, use the
+                face-adjacency-based boundary test on the full mesh.
+        """
+        self.wound_outerboundary_edges = []
+        self.wound_outerboundary_vertices = set()
+        self.wound_outerboundary_faces = set()
+        self.wound_outerboundary_bridge_edges = []
+        self.wound_outerboundary_is_closed = False
+        self.wound_outerboundary_open_endpoints = set()
+        self.periwound_innerboundary_edges = []
+        self.periwound_innerboundary_vertices = set()
+        self.periwound_innerboundary_faces = set()
+        self.periwound_innerboundary_is_continuous = False
 
         wound_faces_set = set(wound_faces)
-        all_faces_set = set(range(len(self.faces)))
-        non_wound_faces = all_faces_set - wound_faces_set
+        periwound_faces_set = set(periwound_faces) if periwound_faces is not None else set()
 
-        for edge, face_list in self.edge_adjacency.items():
-            wound_count = sum(1 for f in face_list if f in wound_faces_set)
-            non_wound_count = sum(1 for f in face_list if f in non_wound_faces)
+        if not wound_faces_set:
+            return
 
-            if wound_count > 0 and (non_wound_count > 0 or len(face_list) == 1):
-                self.wound_edge_edges.append(edge)
-                self.wound_edge_vertices.update(edge)
-                for f in face_list:
-                    if f in wound_faces_set:
-                        self.wound_edge_faces.add(f)
+        def _is_continuous_path(edges: List[Tuple[int, int]]) -> bool:
+            if not edges:
+                return False
+
+            degree_map = defaultdict(int)
+            vertex_neighbors = defaultdict(set)
+            for a, b in edges:
+                a_i = int(a)
+                b_i = int(b)
+                degree_map[a_i] += 1
+                degree_map[b_i] += 1
+                vertex_neighbors[a_i].add(b_i)
+                vertex_neighbors[b_i].add(a_i)
+
+            start_vertex = next(iter(degree_map.keys()))
+            stack = [start_vertex]
+            visited_vertices = set()
+            while stack:
+                current = stack.pop()
+                if current in visited_vertices:
+                    continue
+                visited_vertices.add(current)
+                for nb in vertex_neighbors[current]:
+                    if nb not in visited_vertices:
+                        stack.append(nb)
+
+            if len(visited_vertices) != len(degree_map):
+                return False
+
+            odd_vertices = sum(1 for deg in degree_map.values() if deg % 2 == 1)
+            max_degree = max(degree_map.values()) if degree_map else 0
+            return max_degree <= 2 and odd_vertices in (0, 2)
+
+        if use_submesh_boundary:
+            edge_use_count = defaultdict(int)
+            edge_to_wound_faces = defaultdict(set)
+
+            for face_idx in wound_faces_set:
+                if face_idx < 0 or face_idx >= len(self.faces):
+                    continue
+                v0, v1, v2 = self.faces[face_idx]
+                tri_edges = [
+                    tuple(sorted((int(v0), int(v1)))),
+                    tuple(sorted((int(v1), int(v2)))),
+                    tuple(sorted((int(v2), int(v0)))),
+                ]
+                for edge in tri_edges:
+                    edge_use_count[edge] += 1
+                    edge_to_wound_faces[edge].add(int(face_idx))
+
+            for edge, count in edge_use_count.items():
+                if count == 1:
+                    self.wound_outerboundary_edges.append(edge)
+                    self.wound_outerboundary_vertices.update(edge)
+                    self.wound_outerboundary_faces.update(edge_to_wound_faces.get(edge, set()))
+        else:
+            for edge, face_list in self.edge_adjacency.items():
+                wound_count = sum(1 for f in face_list if f in wound_faces_set)
+                # Outer boundary from wound topology only:
+                # edge lies on wound subset boundary if only part of adjacent faces are wound,
+                # or if this is a mesh boundary edge touched by wound.
+                if wound_count > 0 and (wound_count < len(face_list) or len(face_list) == 1):
+                    self.wound_outerboundary_edges.append(edge)
+                    self.wound_outerboundary_vertices.update(edge)
+                    for f in face_list:
+                        if f in wound_faces_set:
+                            self.wound_outerboundary_faces.add(f)
+
+        # ordered_edges, ordered_vertices, ordered_is_closed, ordered_open_endpoints = self._order_boundary_edges(
+        #     self.wound_outerboundary_edges
+        # )
+        # self.wound_outerboundary_edges = ordered_edges
+        # self.wound_outerboundary_vertices = set(ordered_vertices)
+        # self.wound_outerboundary_is_closed = bool(ordered_is_closed)
+        # self.wound_outerboundary_open_endpoints = set(ordered_open_endpoints)
+
+        # outerboundary_is_continuous = _is_continuous_path(self.wound_outerboundary_edges)
+
+        # # Secondary option: if outer boundary is fragmented, provide periwound inner boundary.
+        # if not outerboundary_is_continuous and periwound_faces_set:
+        #     for edge, face_list in self.edge_adjacency.items():
+        #         wound_count = sum(1 for f in face_list if f in wound_faces_set)
+        #         periwound_count = sum(1 for f in face_list if f in periwound_faces_set)
+
+        #         if wound_count > 0 and periwound_count > 0:
+        #             self.periwound_innerboundary_edges.append(edge)
+        #             self.periwound_innerboundary_vertices.update(edge)
+        #             for f in face_list:
+        #                 if f in periwound_faces_set:
+        #                     self.periwound_innerboundary_faces.add(f)
+
+        #     self.periwound_innerboundary_is_continuous = _is_continuous_path(self.periwound_innerboundary_edges)
+
+        # repaired_edges, bridge_edges, is_closed, open_endpoints = self._repair_wound_boundary_edges(self.wound_outerboundary_edges)
+        # ordered_edges, ordered_vertices, ordered_is_closed, ordered_open_endpoints = self._order_boundary_edges(repaired_edges)
+
+        # self.wound_outerboundary_edges = ordered_edges
+        # self.wound_outerboundary_vertices = set(ordered_vertices)
+        # self.wound_outerboundary_bridge_edges = sorted({tuple(sorted(edge)) for edge in bridge_edges})
+        # self.wound_outerboundary_is_closed = bool(is_closed and ordered_is_closed)
+        # self.wound_outerboundary_open_endpoints = set(open_endpoints) | set(ordered_open_endpoints)
+
+        # if not self.wound_outerboundary_is_closed:
+        #     print(
+        #         f"Warning: wound outerboundary contour is not fully closed after repair; "
+        #         f"open_endpoints={len(self.wound_outerboundary_open_endpoints)}, "
+        #         f"bridge_edges={len(self.wound_outerboundary_bridge_edges)}"
+        #     )
     
 
     def morphological_closing_opening(self,
@@ -3937,7 +4264,7 @@ def MeshReduction(mesh_path: str, model_path: Path, mask_dir: Path, extruded_mas
             print(f"Saved periwound-trimmed mesh to: {trimmed_output_path}")
         
             simplifier = MeshSimplifier(str(trimmed_output_path))
-            simplifier.run(smooth_iterations=3, decimation_threshold=decimation_threshold, min_component_face_count=25)
+            simplifier.run(smooth_iterations=3)
             simplifier.save(trimmed_output_path)
         else:
             print("No vertices in trimmed mesh, skipping saving and simplification")
@@ -3959,7 +4286,7 @@ def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
 
     try:
         
-        mesh_path = MeshReduction(mesh_path, model_path, mask_dir, extruded_mask_dir, decimation_threshold=0.7) #Creates a periwound-trimmed mesh based on mask projection. Basically removes everything outside the periwound outer boundary. It then simplifies the mesh to reduce face count while preserving detail.
+        mesh_path = MeshReduction(mesh_path, model_path, mask_dir, extruded_mask_dir) #Creates a periwound-trimmed mesh based on mask projection. Basically removes everything outside the periwound outer boundary. It then simplifies the mesh to reduce face count while preserving detail.
         wound_model = WoundModel3DMesh()
         
         wound_model.load_mesh(mesh_path, compute_normals=True)

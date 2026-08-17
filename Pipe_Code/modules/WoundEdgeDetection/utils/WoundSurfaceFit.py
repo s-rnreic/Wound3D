@@ -217,6 +217,16 @@ def fit_constrained_healthy_skin_surface(self,
     )
     rec = _reconstruct_surface_from_heights(origin, basis, lc, h_opt)
 
+    
+    rr.log(
+        '/analysis/optimized_surface',
+        rr.Points3D(
+            positions=np.ascontiguousarray(rec, dtype=np.float64),
+            colors=[255, 255, 0],
+            radii=0.0005,
+        ),
+        static=True,
+    )
     height_delta = np.asarray(h_opt, dtype=np.float64).ravel() - h0
     height_epsilon = max(1e-6, 1e-6 * float(np.max(np.abs(h0)) if h0.size > 0 else 1.0))
     positive_delta = np.where(height_delta > height_epsilon, height_delta, 0.0)

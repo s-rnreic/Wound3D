@@ -216,12 +216,12 @@ def open_ini_in_editor(ini_path: str) -> None:
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options, enhance_option=None, custom_parameters=None, sharpness_value=25)->float:
+def run_colmap_process(video_path, segments, image_options, Masking=False, enhance_option=None, custom_parameters=None, sharpness_value=25)->float:
     global ini_path, database_path , sparse_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
     create_workspace(workspace_path)
-    ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path)
+    ini_path, database_path=ctpi.standard_ini_pipline(workspace_path, sharp_image_path, image_mask_path ,Masking=Masking)
     # open_ini_in_editor(ini_path)
     
     # if custom_parameters:

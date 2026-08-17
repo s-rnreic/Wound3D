@@ -158,11 +158,12 @@ def execute_tepm_project_ini(ini_path, *keywords):
     command = f'colmap {keywords[0]} --project_path \"{ini_path}\"'
     run_command(command)
 
-def standard_ini_pipline(workspace_path, image_path, mask_path, *keywords):
+def standard_ini_pipline(workspace_path, image_path, mask_path, Masking=False, *keywords):
     ini_path, database_path=setup_project_ini(workspace_path)
     insert_keywords_to_project_ini(ini_path, 'HEADER', 'image_path', image_path)
-    insert_keywords_to_project_ini(ini_path, 'ImageReader', 'mask_path', mask_path)
-    insert_keywords_to_project_ini(ini_path, 'StereoFusion', 'mask_path', mask_path)
+    if Masking:
+        insert_keywords_to_project_ini(ini_path, 'ImageReader', 'mask_path', mask_path)
+        insert_keywords_to_project_ini(ini_path, 'StereoFusion', 'mask_path', mask_path)
     
     return ini_path, database_path
     

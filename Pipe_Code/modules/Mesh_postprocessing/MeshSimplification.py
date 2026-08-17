@@ -576,6 +576,9 @@ class MeshSimplifier:
             )
         )
 
+        self.is_watertight = is_watertight
+        self.is_edge_manifold_with_boundary = is_edge_manifold_with_boundary
+        
         return {
             "vertices": mesh.vertex_number(),
             "faces": mesh.face_number(),

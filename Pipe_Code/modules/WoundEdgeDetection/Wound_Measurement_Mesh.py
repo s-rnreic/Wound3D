@@ -87,8 +87,8 @@ def _get_wound_face_indices(wound_model: Any) -> List[int]:
 	if faces:
 		return faces
 
-	# Fallback: use wound edge faces if final set is not persisted.
-	edge_faces = sorted(list(getattr(wound_model, "wound_edge_faces", set()) or []))
+	# Fallback: use outerboundary faces if final set is not persisted.
+	edge_faces = sorted(list(getattr(wound_model, "wound_outerboundary_faces", set()) or []))
 	return edge_faces
 
 
@@ -102,8 +102,8 @@ def _collect_wound_vertex_indices(wound_model: Any, wound_face_indices: Sequence
 
 
 def _collect_boundary_vertices_and_edges(wound_model: Any) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-	boundary_vertices: Set[int] = set(getattr(wound_model, "wound_edge_vertices", set()) or set())
-	boundary_edges: List[Tuple[int, int]] = list(getattr(wound_model, "wound_edge_edges", []) or [])
+	boundary_vertices: Set[int] = set(getattr(wound_model, "wound_outerboundary_vertices", set()) or set())
+	boundary_edges: List[Tuple[int, int]] = list(getattr(wound_model, "wound_outerboundary_edges", []) or [])
 
 	if boundary_vertices:
 		bv = np.array(sorted(boundary_vertices), dtype=np.int64)
@@ -564,7 +564,7 @@ def visualize_wound_measurements_rerun(
 			static=True,
 		)
 
-	boundary_vertex_ids = sorted(list(getattr(wound_model, "wound_edge_vertices", set()) or []))
+	boundary_vertex_ids = sorted(list(getattr(wound_model, "wound_outerboundary_vertices", set()) or []))
 	if len(boundary_vertex_ids) > 0:
 		boundary_pts = vertices[np.array(boundary_vertex_ids, dtype=np.int64)]
 		rr.log(
@@ -573,7 +573,7 @@ def visualize_wound_measurements_rerun(
 			static=True,
 		)
 
-	boundary_edges = list(getattr(wound_model, "wound_edge_edges", []) or [])
+	boundary_edges = list(getattr(wound_model, "wound_outerboundary_edges", []) or [])
 	if len(boundary_edges) > 0:
 		strips = []
 		for v0, v1 in boundary_edges:
