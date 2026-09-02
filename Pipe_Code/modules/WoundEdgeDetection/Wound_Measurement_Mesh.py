@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from uuid import uuid4
 
 import numpy as np
 
@@ -515,7 +516,7 @@ def visualize_wound_measurements_rerun(
 	session_name: str = "WoundMesh_Measurements",
 	spawn: bool = True,
 ) -> None:
-	"""Show measured dimensions in Rerun (boundary, axes, and height profile)."""
+	"""Show measured dimensions in a unique Rerun session."""
 	try:
 		import rerun as rr
 	except Exception:
@@ -531,11 +532,12 @@ def visualize_wound_measurements_rerun(
 		print("Measurement visualization skipped: mesh not available")
 		return
 
+	unique_session_name = f"{session_name}_{uuid4().hex}"
 	try:
-		rr.init(session_name, spawn=spawn)
+		rr.init(unique_session_name, spawn=spawn)
 	except Exception as e:
 		print(f"Could not launch Rerun viewer directly ({e}); continuing with default init")
-		rr.init(session_name)
+		rr.init(unique_session_name)
 
 	rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
 
@@ -630,4 +632,4 @@ def visualize_wound_measurements_rerun(
 	)
 
 	rr.log("/measurement/summary", rr.TextDocument(format_measurement_summary(data)), static=True)
-	print("Rerun wound-dimension visualization logged")
+	print(f"Rerun wound-dimension visualization logged: {unique_session_name}")
