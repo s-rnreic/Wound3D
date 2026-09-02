@@ -4272,7 +4272,20 @@ def MeshReduction(mesh_path: str, model_path: Path, mask_dir: Path, extruded_mas
         
         return trimmed_output_path
         
-def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
+def _to_builtin_result_value(value: Any) -> Any:
+    """Convert NumPy-based measurement values into JSON-serializable Python values."""
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _to_builtin_result_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_builtin_result_value(item) for item in value]
+    return value
+
+
+def main(workspace_path: str, mesh_path: Path = None, visualization: bool = True) -> Dict[str, Any]:
     """
     Example usage of mesh-based wound detection with periwound detection.
     """
@@ -4283,6 +4296,14 @@ def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
     model_path = Path(workspace_path) / "dense"
     mask_dir = Path(workspace_path) / "dense" / "masks_wound_only_undistorted"
     extruded_mask_dir = Path(workspace_path) / "dense" / "masks_extruded_wound_only_undistorted"
+
+    results: Dict[str, Any] = {
+        "length": None,
+        "width": None,
+        "height": None,
+        "volume": None,
+        "measurement": None,
+    }
 
     try:
         
@@ -4364,6 +4385,31 @@ def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
             print(f"Warning: wound measurement failed: {measurement_error}")
             traceback.print_exc()
 
+        if wound_measurement_result is not None:
+            measurement_data = _to_builtin_result_value(wound_measurement_result.to_dict())
+            plane_profile = measurement_data.get("approach_2_plane_profile", {})
+            results.update({
+                "length": plane_profile.get("length"),
+                "width": plane_profile.get("width"),
+                "height": plane_profile.get("max_height"),
+                "measurement": measurement_data,
+            })
+
+        results["volume"] = _to_builtin_result_value(
+            wound_model.constrained_healthy_skin_surface_volume
+        )
+        results["volume_diagnostics"] = _to_builtin_result_value({
+            "surface_volume": getattr(wound_model, "constrained_healthy_skin_surface_surface_volume", None),
+            "fallback_volume": getattr(wound_model, "constrained_healthy_skin_surface_fallback_volume", None),
+            "volume_ratio": getattr(wound_model, "constrained_healthy_skin_surface_volume_ratio", None),
+            "relative_difference": getattr(
+                wound_model,
+                "constrained_healthy_skin_surface_volume_relative_difference",
+                None,
+            ),
+            "warning": getattr(wound_model, "constrained_healthy_skin_surface_volume_warning", None),
+        })
+
      
 
         # Save the initial wound mesh
@@ -4374,10 +4420,13 @@ def main(workspace_path: str, mesh_path: Path=None, visualization: bool = True):
         
         
         print("\n=== Processing Complete ===")
+        return results
         
     except Exception as e:
         print(f"Error in main: {e}")
         traceback.print_exc()
+        results["error"] = str(e)
+        return results
 
 
 if __name__ == "__main__":

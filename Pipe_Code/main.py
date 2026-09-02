@@ -203,20 +203,23 @@ def Meshing(workspace_path:str, log_file:str, processed_pointcloud_path: Path)->
         raise FileNotFoundError(f"Created mesh not found: {poisson_mesh_path}")
 
 
-def Segmentation3D(workspace_path:str, log_file:str)->None:
+def Segmentation3D(workspace_path: str, log_file: str) -> dict:
     from Pipe_Code.modules.WoundEdgeDetection.Wound_Detection_Mesh import main as execute_segmentation
-    
-    elapse_time = execute_segmentation(workspace_path)
+
+    start_time = time.time()
+    results = execute_segmentation(workspace_path)
+    elapse_time = time.time() - start_time
     log_time(log_file, "3DSegmentation", elapse_time)
-    
-    return
+
+    return results
 
 def open_ini_in_editor(ini_path: str) -> None:
     editor = os.getenv('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
     subprocess.call([editor, ini_path])
        
 
-def run_colmap_process(video_path, segments, image_options, Masking=False, enhance_option=None, custom_parameters=None, sharpness_value=25)->float:
+def run_colmap_process(video_path, segments, image_options, Masking=False, enhance_option=None,
+                       custom_parameters=None, sharpness_value=25) -> tuple[dict, float]:
     global ini_path, database_path , sparse_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
@@ -255,11 +258,12 @@ def run_colmap_process(video_path, segments, image_options, Masking=False, enhan
     
     Meshing(workspace_path, log_file, processed_pointcloud_path=processed_pointcloud_path)
     
-    Segmentation3D(workspace_path, log_file)
+    results = Segmentation3D(workspace_path, log_file)
     
     total_elapsed_time = calculate_total_elapsed_time(log_file)
     # print(f"Total elapsed time: {total_elapsed_time:.2f} seconds")
-    return total_elapsed_time        
+
+    return results, total_elapsed_time
 
 
 def main()->None:
