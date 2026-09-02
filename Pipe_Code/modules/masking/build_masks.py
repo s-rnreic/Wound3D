@@ -421,6 +421,8 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         import subprocess
         import shutil
         import stat
+        import tempfile
+        import uuid
         
         from deepskin import wound_segmentation as _original_wound_segmentation
             # Import our cached wrapper to prevent TensorFlow retracing (same directory)
@@ -457,20 +459,75 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
         
         
-        # Convert Windows paths to WSL paths for the command
+        # Convert Windows paths to WSL paths for the command.
+        # Use wslpath first because mapped/network drives are not always represented by /mnt/<drive>/...
         def win_to_wsl_path(win_path):
-            """Convert a Windows path to a WSL-compatible path (/mnt/c/...)"""
-            # Normalize backslashes and handle drive letters
-            win_path = os.path.normpath(win_path)
-            drive_letter = win_path[0].lower()
-            rest = win_path[3:]  # Skip "C:\" or similar
-            # Replace backslashes with forward slashes
-            rest = rest.replace('\\', '/')
+            normalized = os.path.normpath(win_path)
+            result = subprocess.run(
+                ["wsl", "wslpath", "-a", normalized],
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+
+            drive_letter = normalized[0].lower()
+            rest = normalized[3:].replace('\\', '/')
             return f"/mnt/{drive_letter}/{rest}"
-        
+
+        def wsl_dir_exists(wsl_path):
+            escaped = wsl_path.replace("'", "'\\''")
+            check = subprocess.run(
+                ["wsl", "bash", "-lc", f"test -d '{escaped}'"],
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            return check.returncode == 0
+
+        def write_woundambit_masks(source_folder, target_folder):
+            for old_name in os.listdir(source_folder):
+                old_path = os.path.join(source_folder, old_name)
+                if not os.path.isfile(old_path):
+                    continue
+                print("renaming masks...")
+                base_name = os.path.splitext(old_name)[0]
+                new_img_name = base_name + ".jpg.png"
+                new_path = os.path.join(target_folder, new_img_name)
+                image = cv2.imread(old_path)
+                if image is None:
+                    continue
+                cv2.imwrite(new_path, image)
+                if os.path.abspath(source_folder) == os.path.abspath(target_folder):
+                    os.remove(old_path)
+
+        output_folder_full = wound_only_folder
         input_folder_wsl = win_to_wsl_path(input_folder)
-        output_folder_full = wound_only_folder  # The output folder for masks (wound+tissue)
         output_folder_wsl = win_to_wsl_path(output_folder_full)
+
+        stage_dir = None
+        stage_input_win = None
+        stage_output_win = None
+        run_input_wsl = input_folder_wsl
+        run_output_wsl = output_folder_wsl
+
+        if not wsl_dir_exists(input_folder_wsl):
+            print(f"WSL cannot access input path directly: {input_folder_wsl}")
+            print("Staging images to a C-drive temp folder for WoundAmbit.")
+            stage_dir = os.path.join(tempfile.gettempdir(), f"woundambit_staging_{uuid.uuid4().hex}")
+            stage_input_win = os.path.join(stage_dir, "input")
+            stage_output_win = os.path.join(stage_dir, "output")
+            os.makedirs(stage_input_win, exist_ok=True)
+            os.makedirs(stage_output_win, exist_ok=True)
+
+            for entry in os.listdir(input_folder):
+                source = os.path.join(input_folder, entry)
+                if os.path.isfile(source):
+                    shutil.copy2(source, os.path.join(stage_input_win, entry))
+
+            run_input_wsl = win_to_wsl_path(stage_input_win)
+            run_output_wsl = win_to_wsl_path(stage_output_win)
         
         woundambit_available = False
         
@@ -489,12 +546,12 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             print("WARNING: WoundAmbit conda environment 'woundambit' not found.")
         else:
             print(f"WoundAmbit environment found. Running WoundAmbit inference...")
-            print(f"  Input folder (WSL):  {input_folder_wsl}")
-            print(f"  Output folder (WSL): {output_folder_wsl}")
+            print(f"  Input folder (WSL):  {run_input_wsl}")
+            print(f"  Output folder (WSL): {run_output_wsl}")
             
             # Escape single quotes in paths for the shell command
-            input_escaped = input_folder_wsl.replace("'", "'\\''")
-            output_escaped = output_folder_wsl.replace("'", "'\\''")
+            input_escaped = run_input_wsl.replace("'", "'\\''")
+            output_escaped = run_output_wsl.replace("'", "'\\''")
             
             cmd = f"""
             set -e
@@ -510,23 +567,23 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
                 text=True,
             )
 
-            for old_name in os.listdir(output_folder_full):
-                print("renaming masks...")
-                base_name = os.path.splitext(old_name)[0]
-                new_img_name = base_name + ".jpg.png"
-                old_path = os.path.join(output_folder_full, old_name)
-                new_path = os.path.join(wound_only_folder, new_img_name)
-                cv2.imwrite(new_path, cv2.imread(old_path))
-                os.remove(old_path)
             print("Return code:", result.returncode)
             print("--- STDOUT ---")
             print(result.stdout)
             print("--- STDERR ---")
             print(result.stderr)
 
-            if result.returncode != 0:
+            if result.returncode == 0:
+                if stage_output_win is not None:
+                    write_woundambit_masks(stage_output_win, wound_only_folder)
+                    shutil.rmtree(stage_dir, ignore_errors=True)
+                else:
+                    write_woundambit_masks(output_folder_full, wound_only_folder)
+            else:
                 print(f"WARNING: WoundAmbit inference failed with return code {result.returncode}.")
                 woundambit_available = False
+                if stage_dir is not None:
+                    shutil.rmtree(stage_dir, ignore_errors=True)
 
         if not woundambit_available:
             print("Falling back to conservative (LAB-based) segmentation.")
