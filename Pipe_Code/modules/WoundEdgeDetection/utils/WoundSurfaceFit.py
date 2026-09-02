@@ -242,6 +242,19 @@ def fit_constrained_healthy_skin_surface(self,
     surface_volume = float(np.sum(vertex_area_weights * positive_delta))
     fallback_volume = _estimate_wound_convex_hull_volume(vertices, faces, wound_faces)
 
+    signed_triangle_volume_meshes, signed_triangle_volumes = _build_signed_triangle_volume_meshes(
+        support_vertices=support_vertices,
+        measured_surface=d3d,
+        optimized_surface=rec,
+        faces=support_faces_local[np.asarray(
+            [int(face_id) in w_faces for face_id in support_face_ids],
+            dtype=bool,
+        )],
+        origin=origin,
+        basis=basis,
+    )
+    convex_hull_mesh = _build_wound_convex_hull_mesh(vertices, faces, wound_faces)
+
     volume = surface_volume
     volume_ratio = np.nan
     volume_relative_difference = np.nan
@@ -283,6 +296,9 @@ def fit_constrained_healthy_skin_surface(self,
     self.constrained_healthy_skin_surface_volume_warning = volume_warning
     self.constrained_healthy_skin_surface_volume_mesh = self.constrained_healthy_skin_surface_mesh
     self.constrained_healthy_skin_surface_volume_meshes = [self.constrained_healthy_skin_surface_mesh]
+    self.constrained_healthy_skin_surface_signed_triangle_volume_meshes = signed_triangle_volume_meshes
+    self.constrained_healthy_skin_surface_signed_triangle_volumes = signed_triangle_volumes
+    self.constrained_healthy_skin_surface_convex_hull_mesh = convex_hull_mesh
     self.constrained_healthy_skin_surface_volume_components = [
         {
             'component_index': 0,
@@ -308,7 +324,16 @@ def fit_constrained_healthy_skin_surface(self,
         'volume_ratio': float(volume_ratio) if np.isfinite(volume_ratio) else np.nan,
         'volume_relative_difference': float(volume_relative_difference) if np.isfinite(volume_relative_difference) else np.nan,
         'volume_warning': volume_warning,
+        'signed_triangle_volumes': np.asarray(signed_triangle_volumes, dtype=np.float64),
     }
+
+    _log_signed_volume_visualization(
+        rr,
+        signed_triangle_volume_meshes,
+        signed_triangle_volumes,
+        convex_hull_mesh,
+        session_path='/analysis/healthy_skin_surface_signed_volume',
+    )
     if volume_warning is None:
         print(
             'Positive-height volume estimate: '
@@ -744,6 +769,94 @@ def _solve_quadratic_height_system(self, Q, b, use_cvxpy=False, lower_bounds=Non
     return np.asarray(spla.spsolve(Q.tocsc(), np.asarray(b, dtype=np.float64)), dtype=np.float64).ravel()
 
 
+def _build_signed_triangle_volume_meshes(support_vertices, measured_surface, optimized_surface,
+                                         faces, origin, basis):
+    """Build signed triangular prisms for the supplied wound faces only."""
+    support_vertices = np.asarray(support_vertices, dtype=np.float64)
+    measured_surface = np.asarray(measured_surface, dtype=np.float64)
+    optimized_surface = np.asarray(optimized_surface, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    if faces.size == 0:
+        return [], np.empty(0, dtype=np.float64)
+    faces = faces.reshape(-1, 3)
+    local_measured = _project_points_to_local_frame(measured_surface, origin, basis)
+    local_optimized = _project_points_to_local_frame(optimized_surface, origin, basis)
+    meshes = []
+    volumes = []
+    for tri in faces:
+        bottom = measured_surface[tri]
+        top = optimized_surface[tri]
+        tri_local = local_measured[tri]
+        signed_area = 0.5 * float(np.cross(tri_local[1, :2] - tri_local[0, :2], tri_local[2, :2] - tri_local[0, :2]))
+        mean_delta = float(np.mean(local_optimized[tri, 2] - tri_local[:, 2]))
+        volumes.append(signed_area * mean_delta)
+        verts = np.vstack([bottom, top])
+        prism_faces = np.asarray([
+            [0, 2, 1], [3, 4, 5],
+            [0, 1, 4], [0, 4, 3],
+            [1, 2, 5], [1, 5, 4],
+            [2, 0, 3], [2, 3, 5],
+        ], dtype=np.int32)
+        meshes.append((np.ascontiguousarray(verts), prism_faces))
+    return meshes, np.asarray(volumes, dtype=np.float64)
+
+
+def _build_wound_convex_hull_mesh(vertices, faces, wound_face_ids):
+    """Return the 3-D convex-hull boundary mesh for wound vertices."""
+    vertices = np.asarray(vertices, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    ids = sorted(int(i) for i in (wound_face_ids or set()) if 0 <= int(i) < len(faces))
+    if not ids:
+        return None
+    vertex_ids = np.unique(faces[np.asarray(ids, dtype=np.int64)].reshape(-1))
+    points = vertices[vertex_ids]
+    finite = np.isfinite(points).all(axis=1)
+    points = points[finite]
+    if len(points) < 4:
+        return None
+    try:
+        from scipy.spatial import ConvexHull
+        hull = ConvexHull(points)
+        return np.ascontiguousarray(points), np.ascontiguousarray(hull.simplices, dtype=np.int32)
+    except Exception:
+        return None
+
+
+def _log_signed_volume_visualization(rr, triangle_meshes, signed_triangle_volumes, convex_hull_mesh,
+                                     session_path='/analysis/healthy_skin_surface_signed_volume'):
+    if not triangle_meshes:
+        return
+    values = np.asarray(signed_triangle_volumes, dtype=np.float64).ravel()
+    max_abs = max(float(np.max(np.abs(values))), 1e-12)
+    combined_vertices = []
+    combined_faces = []
+    combined_colors = []
+    vertex_offset = 0
+    for mesh, value in zip(triangle_meshes, values):
+        magnitude = min(abs(float(value)) / max_abs, 1.0)
+        color = np.asarray([255, int(70 + 150 * (1.0 - magnitude)), 50, 170], dtype=np.uint8) if value >= 0 else np.asarray([50, int(70 + 150 * (1.0 - magnitude)), 255, 170], dtype=np.uint8)
+        verts, faces = mesh
+        combined_vertices.append(verts)
+        combined_faces.append(np.asarray(faces, dtype=np.int32) + vertex_offset)
+        combined_colors.append(np.tile(color[None, :], (len(verts), 1)))
+        vertex_offset += len(verts)
+
+    combined_color = np.concatenate(combined_colors, axis=0)
+    rr.log(f'{session_path}/triangle_volume_parts', rr.Mesh3D(
+        vertex_positions=np.ascontiguousarray(np.concatenate(combined_vertices, axis=0), dtype=np.float64),
+        triangle_indices=np.ascontiguousarray(np.concatenate(combined_faces, axis=0), dtype=np.int32),
+        vertex_colors=np.ascontiguousarray(combined_color, dtype=np.uint8),
+        albedo_factor=np.asarray([255, 140, 80, 170], dtype=np.uint8),
+    ), static=True)
+    if convex_hull_mesh is not None:
+        verts, faces = convex_hull_mesh
+        color = np.asarray([180, 180, 180, 70], dtype=np.uint8)
+        rr.log(f'{session_path}/convex_hull', rr.Mesh3D(
+            vertex_positions=verts, triangle_indices=faces,
+            vertex_colors=np.tile(color[None, :], (len(verts), 1)), albedo_factor=color,
+        ), static=True)
+
+
 def visualize_healthy_skin_surface(self, session_path='/analysis/healthy_skin_surface', spawn=True, color=(70, 150, 255, 120), shading_mode='phong'):
     try:
         import rerun as rr
@@ -829,6 +942,30 @@ def visualize_healthy_skin_surface_volumes(self,
         print(f'Logged {len(meshes_to_log)} volume mesh component(s) to {session_path}')
     except Exception as e:
         print(f'visualize_healthy_skin_surface_volumes failed: {e}')
+
+
+def visualize_healthy_skin_surface_signed_volume(
+        self,
+        session_path: str = '/analysis/healthy_skin_surface_signed_volume',
+        spawn: bool = True) -> None:
+    """Visualize the combined signed triangle prisms and the wound convex hull in Rerun."""
+    try:
+        import rerun as rr
+    except Exception:
+        print('rerun unavailable')
+        return
+    meshes = getattr(self, 'constrained_healthy_skin_surface_signed_triangle_volume_meshes', None)
+    values = getattr(self, 'constrained_healthy_skin_surface_signed_triangle_volumes', None)
+    hull = getattr(self, 'constrained_healthy_skin_surface_convex_hull_mesh', None)
+    if not meshes or values is None:
+        print('no signed volume data; run fit_constrained_healthy_skin_surface first')
+        return
+    try:
+        rr.init('WoundModel3D_Assessment_final', spawn=spawn)
+        _log_signed_volume_visualization(rr, meshes, values, hull, session_path=session_path)
+        print(f'Logged one combined mesh containing {len(meshes)} signed triangle volume part(s) and the convex hull to {session_path}')
+    except Exception as e:
+        print(f'visualize_healthy_skin_surface_signed_volume failed: {e}')
 
 
 def visualize_healthy_skin_surface_shell_parts(self,

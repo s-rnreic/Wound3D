@@ -4335,12 +4335,12 @@ def main(workspace_path: str, mesh_path: Path = None, visualization: bool = True
                 visualize_wound_assessment_rerun,
             )
 
-        visualize_wound_assessment_rerun(
-            wound_model,
-            session_name="WoundModel3D_Assessment",
-            spawn=True,
-            image_root=model_path.parent,
-        )
+            visualize_wound_assessment_rerun(
+                wound_model,
+                session_name="WoundModel3D_Assessment",
+                spawn=True,
+                image_root=model_path.parent,
+            )
 
         print("\n=== Measuring Wound Dimensions ===")
         wound_measurement_result = None
