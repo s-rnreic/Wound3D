@@ -3506,52 +3506,21 @@ class WoundModel3DMesh:
 
         return set(filtered_faces)
 
-    def fit_constrained_healthy_skin_surface(self,
-                                            alpha: float = 1.0,
-                                            beta: float = 1.0,
-                                            gamma: float = 1.0,
-                                            periwound_data_weight: float = 1.0,
-                                            use_cvxpy: bool = False) -> Optional[np.ndarray]:
-        """Fit a healthy-skin reference surface constrained by wound and periwound labels."""
-        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import fit_constrained_healthy_skin_surface
-
-        healthy_skin_surface = fit_constrained_healthy_skin_surface(
-            self,
-            alpha=alpha,
-            beta=beta,
-            gamma=gamma,
-            periwound_data_weight=periwound_data_weight,
-            use_cvxpy=use_cvxpy,
+    def fit_constrained_healthy_skin_surface(self, **kwargs):
+        """Forward healthy-skin surface options to the canonical implementation."""
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import (
+            fit_constrained_healthy_skin_surface,
         )
-        return healthy_skin_surface
 
-    def fit_periwound_surface(self,
-                              method: str = "rbf",
-                              voxel_size: Optional[float] = None,
-                              grid_resolution: int = 128,
-                              smoothing: float = 0.0,
-                              spline_degree: int = 3,
-                              return_points: bool = False,
-                              outer_weighting_exponent: float = 0.0,
-                              function_name: str = 'gaussian',
-                              weighting_mode: str = "power",
-                              inner_weight: float = 0.7) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        """Fit a smooth periwound surface and return the sampled mesh or points."""
-        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import fit_periwound_surface
+        return fit_constrained_healthy_skin_surface(self, **kwargs)
 
-        return fit_periwound_surface(
-            self,
-            method=method,
-            voxel_size=voxel_size,
-            grid_resolution=grid_resolution,
-            smoothing=smoothing,
-            spline_degree=spline_degree,
-            return_points=return_points,
-            outer_weighting_exponent=outer_weighting_exponent,
-            function_name=function_name,
-            weighting_mode=weighting_mode,
-            inner_weight=inner_weight,
+    def fit_periwound_surface(self, **kwargs):
+        """Forward periwound surface options to the canonical implementation."""
+        from Pipe_Code.modules.WoundEdgeDetection.utils.WoundSurfaceFit import (
+            fit_periwound_surface,
         )
+
+        return fit_periwound_surface(self, **kwargs)
 
     def visualize_healthy_skin_surface(self,
                                 session_path: str = "/analysis/healthy_skin_surface",
