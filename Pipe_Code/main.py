@@ -181,7 +181,7 @@ def DensePostProcessing(workspace_path:str, log_file:str, use_pointcleannet:bool
     _, elapse_time = execute_dense_postprocessing(
         dense_model_path=dense_path,
         output_path=output_path,
-        radial_percentile=0.75,
+        radial_percentile=0.99,
         target_points=100000,
         SOR_std=1.5,
         SOR_n=10,
