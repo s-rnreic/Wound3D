@@ -1,9 +1,10 @@
 """
 3D wound measurement utilities for mesh-based segmentation.
 
-Provides multiple geometric approaches to estimate wound dimensions:
+Provides multiple geometric approaches to estimate wound dimensions and area:
 1) Boundary-oriented 3D bounding box (length, width, height)
 2) Boundary-plane projection (length/width on plane + max height profile)
+3) Bioactive surface area and projected boundary area
 
 The functions operate on a WoundModel3DMesh instance produced by
 3DWound_Detection_Mesh.py.
@@ -35,6 +36,8 @@ class WoundMeasurementResult:
 	n_wound_vertices: int
 	n_boundary_vertices: int
 	n_boundary_edges: int
+	bioactive_area: float
+	projected_boundary_area: float
 	approach_1_obb: Dict[str, Any]
 	approach_2_plane_profile: Dict[str, Any]
 	per_approach_uncertainty: Dict[str, Any]
@@ -45,6 +48,8 @@ class WoundMeasurementResult:
 			"n_wound_vertices": self.n_wound_vertices,
 			"n_boundary_vertices": self.n_boundary_vertices,
 			"n_boundary_edges": self.n_boundary_edges,
+			"bioactive_area": self.bioactive_area,
+			"projected_boundary_area": self.projected_boundary_area,
 			"approach_1_obb": self.approach_1_obb,
 			"approach_2_plane_profile": self.approach_2_plane_profile,
 			"per_approach_uncertainty": self.per_approach_uncertainty,
@@ -116,6 +121,88 @@ def _collect_boundary_vertices_and_edges(wound_model: Any) -> Tuple[np.ndarray, 
 		boundary_edges = [(int(bv[i]), int(bv[i + 1])) for i in range(len(bv) - 1)]
 
 	return bv, boundary_edges
+
+
+def _compute_bioactive_surface_area(wound_model: Any, wound_face_indices: Sequence[int]) -> float:
+	"""Sum the true 3D areas of all selected wound triangles."""
+	if not wound_face_indices:
+		return 0.0
+	vertices = np.asarray(wound_model.vertices, dtype=np.float64)
+	faces = np.asarray(wound_model.faces, dtype=np.int64)
+	selected = faces[np.asarray(wound_face_indices, dtype=np.int64)]
+	v0, v1, v2 = vertices[selected[:, 0]], vertices[selected[:, 1]], vertices[selected[:, 2]]
+	return float(0.5 * np.sum(np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)))
+
+
+def _convex_hull_2d(points: np.ndarray) -> np.ndarray:
+	"""Return the vertices of a 2D convex hull in counter-clockwise order."""
+	unique = sorted(set((float(p[0]), float(p[1])) for p in np.asarray(points)))
+	if len(unique) <= 1:
+		return np.asarray(unique, dtype=np.float64).reshape(-1, 2)
+
+	def cross(o, a, b):
+		return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+	lower = []
+	for point in unique:
+		while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+			lower.pop()
+		lower.append(point)
+	upper = []
+	for point in reversed(unique):
+		while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+			upper.pop()
+		upper.append(point)
+	return np.asarray(lower[:-1] + upper[:-1], dtype=np.float64)
+
+
+def _polygon_area_2d(points: np.ndarray) -> float:
+	if len(points) < 3:
+		return 0.0
+	return float(0.5 * abs(np.sum(points[:, 0] * np.roll(points[:, 1], -1) -
+											points[:, 1] * np.roll(points[:, 0], -1))))
+
+
+def _compute_projected_boundary_area(
+		boundary_vertex_idx: np.ndarray,
+		boundary_edges: Sequence[Tuple[int, int]],
+		vertices: np.ndarray,
+		origin: np.ndarray,
+		u: np.ndarray,
+		v: np.ndarray,
+		fallback_points: np.ndarray,
+	) -> Tuple[float, str]:
+	"""Calculate area enclosed by the wound boundary after PCA-plane projection."""
+	projected = (vertices - origin) @ np.column_stack((u, v))
+	if boundary_edges:
+		adjacency: Dict[int, List[int]] = {}
+		for a, b in boundary_edges:
+			adjacency.setdefault(int(a), []).append(int(b))
+			adjacency.setdefault(int(b), []).append(int(a))
+		unvisited = {tuple(sorted((int(a), int(b)))) for a, b in boundary_edges}
+		areas = []
+		while unvisited:
+			a, b = next(iter(unvisited))
+			loop = [a, b]
+			unvisited.remove((a, b))
+			previous, current = a, b
+			while True:
+				next_vertices = [x for x in adjacency.get(current, []) if x != previous and tuple(sorted((current, x))) in unvisited]
+				if not next_vertices:
+					break
+				next_vertex = next_vertices[0]
+				unvisited.remove(tuple(sorted((current, next_vertex))))
+				loop.append(next_vertex)
+				previous, current = current, next_vertex
+				if current == loop[0]:
+					break
+			if len(loop) >= 3 and current == loop[0]:
+				areas.append(_polygon_area_2d(projected[np.asarray(loop[:-1])]))
+		if areas:
+			return float(sum(areas)), "boundary_edge_loops"
+
+	points = projected[boundary_vertex_idx] if len(boundary_vertex_idx) >= 3 else (fallback_points - origin) @ np.column_stack((u, v))
+	return _polygon_area_2d(_convex_hull_2d(points)), "projected_convex_hull_fallback"
 
 
 def _approach_1_boundary_oriented_obb(boundary_points: np.ndarray, wound_points: np.ndarray) -> Dict[str, Any]:
@@ -398,7 +485,7 @@ def _estimate_per_approach_uncertainty(
 
 
 def measure_wound_dimensions_from_model(wound_model: Any, visualization: bool = False) -> WoundMeasurementResult:
-	"""Compute wound dimensions using multiple geometric approaches."""
+	"""Compute wound dimensions and both requested wound-area measures."""
 	if getattr(wound_model, "vertices", None) is None or getattr(wound_model, "faces", None) is None:
 		raise ValueError("Model geometry is not loaded")
 
@@ -419,6 +506,22 @@ def measure_wound_dimensions_from_model(wound_model: Any, visualization: bool = 
 
 	approach_1 = _approach_1_boundary_oriented_obb(boundary_points, wound_points)
 	approach_2 = _approach_2_boundary_plane_profile(boundary_points, wound_points)
+	bioactive_area = _compute_bioactive_surface_area(wound_model, wound_face_indices)
+	projected_area, projected_area_method = _compute_projected_boundary_area(
+		boundary_vertex_idx=boundary_vertex_idx,
+		boundary_edges=boundary_edges,
+		vertices=np.asarray(wound_model.vertices, dtype=np.float64),
+		origin=np.asarray(approach_2["plane_origin"], dtype=np.float64),
+		u=np.asarray(approach_2["plane_axis_u"], dtype=np.float64),
+		v=np.asarray(approach_2["plane_axis_v"], dtype=np.float64),
+		fallback_points=wound_points,
+	)
+	area_measurements = {
+		"bioactive_surface_area": bioactive_area,
+		"projected_boundary_area": projected_area,
+		"projected_boundary_area_method": projected_area_method,
+		"units": "model_units^2",
+	}
 	per_approach_uncertainty = _estimate_per_approach_uncertainty(
 		boundary_points=boundary_points,
 		wound_points=wound_points,
@@ -433,11 +536,15 @@ def measure_wound_dimensions_from_model(wound_model: Any, visualization: bool = 
 		n_wound_vertices=int(len(wound_vertex_idx)),
 		n_boundary_vertices=int(len(boundary_vertex_idx)),
 		n_boundary_edges=int(len(boundary_edges)),
+		bioactive_area=bioactive_area,
+		projected_boundary_area=projected_area,
 		approach_1_obb=approach_1,
 		approach_2_plane_profile=approach_2,
 		per_approach_uncertainty=per_approach_uncertainty,
 		uncertainty_estimation=uncertainty,
 	)
+	result.approach_1_obb["area_measurements"] = area_measurements
+	result.approach_2_plane_profile["area_measurements"] = area_measurements
 
 	if visualization:
 		print(format_measurement_summary(result))
@@ -460,6 +567,10 @@ def format_measurement_summary(result: WoundMeasurementResult | Dict[str, Any]) 
 		"=== Wound Measurement Summary ===",
 		f"Wound vertices: {data['n_wound_vertices']}",
 		f"Boundary vertices: {data['n_boundary_vertices']}",
+		"",
+		"Area measurements:",
+		f"  Bioactive surface area (sum of wound faces): {data['bioactive_area']:.6f}",
+		f"  Projected boundary area (PCA plane): {data['projected_boundary_area']:.6f}",
 		f"Boundary edges: {data['n_boundary_edges']}",
 		"",
 		"Approach 1 (Boundary-oriented OBB):",
