@@ -4361,6 +4361,8 @@ def main(workspace_path: str, mesh_path: Path = None, visualization: bool = True
                 "length": plane_profile.get("length"),
                 "width": plane_profile.get("width"),
                 "height": plane_profile.get("max_height"),
+                "bioactive_area": measurement_data.get("bioactive_area"),
+                "projected_boundary_area": measurement_data.get("projected_boundary_area"),
                 "measurement": measurement_data,
             })
 
