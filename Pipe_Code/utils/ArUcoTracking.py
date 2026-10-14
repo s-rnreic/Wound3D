@@ -319,7 +319,9 @@ def main(workspace_path: str, Tag_size: float) -> None:
     observations, previews = gather_tag_observations(image_dir, cameras, images, Tag_size)
 
     if not observations:
+        return
         raise RuntimeError("No AprilTag observations matched the COLMAP images.")
+
 
     if manuel_scale is not None:
         scale_factor = float(manuel_scale)
