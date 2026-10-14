@@ -219,7 +219,7 @@ def open_ini_in_editor(ini_path: str) -> None:
        
 
 def run_colmap_process(video_path, segments, image_options, Masking=False, enhance_option=None,
-                       custom_parameters=None, sharpness_value=25) -> tuple[dict, float]:
+                       custom_parameters=None, Tag_size=0.0123,sharpness_value=25) -> tuple[dict, float]:
     global ini_path, database_path , sparse_path
     
     log_file = os.path.join(workspace_path, 'pipeline_times.log')
@@ -231,7 +231,7 @@ def run_colmap_process(video_path, segments, image_options, Masking=False, enhan
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=False)
+    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=False)
 
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     
@@ -250,7 +250,7 @@ def run_colmap_process(video_path, segments, image_options, Masking=False, enhan
     
     COLMAP_RERUN(workspace_path, sparse_path, log_file) #This step only make sense when there is a bundle adjustment afterwards implemented
     
-    ARUCOTracking(workspace_path, 0.0123, log_file)
+    ARUCOTracking(workspace_path, Tag_size, log_file)
     
     MVS(workspace_path, log_file)
     
@@ -292,11 +292,11 @@ def main()->None:
 if __name__ == '__main__':
     global workspace_path, ini_path, sharp_image_path, raw_images_path, database_path
     # video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
-    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein3"
+    base_workspace_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Test"
     #video_dir = r"C:\Users\Reich\Interface\Videos\Package_Recordings\Roll_labled"
-    video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Testdaten-Videos\VID_20010906_032304101.mp4"
+    video_path = r"C:\Users\Reich\Interface\Videos\Wound_Recordings\Ferse\Ferse_3+4.mp4"
     workspace_path = base_workspace_path
     resize_factor = [1.0]  # You can adjust or make this a list if needed
-    segments = [20]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
+    segments = [10]        # You can adjust or make this a list if needed  # Percentile values for sharpness selection
    
     run_colmap_process(video_path, segments[0], {'reduce_size': resize_factor[0]}, enhance_option=None, custom_parameters=None, sharpness_value=25.0)
