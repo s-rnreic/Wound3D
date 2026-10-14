@@ -42,9 +42,8 @@ if _workspace_root not in sys.path:
 if _pipe_code_dir not in sys.path:
     sys.path.insert(0, _pipe_code_dir)
 
-from CODE_Evaluation_Viewer_Align.Transformation import *
+#from CODE_Evaluation_Viewer_Align.ICP.Transformation import *
 from utils.read_write_model import read_model, qvec2rotmat
-from CODE_Evaluation_Viewer_Align.read_write_dense import read_array
 from Pipe_Code.modules.Mesh_postprocessing.MeshSimplification import MeshSimplifier
 
 
@@ -1265,6 +1264,7 @@ class WoundModel3DMesh:
         r_periwound_nonzero = r_periwound_values[r_periwound_values > 0.0]
         periwound_candidate_periwound_thresh = max(float(np.percentile(r_periwound_nonzero, 100.0 - periwound_candidate_top_percent)), 0.05) if len(r_periwound_nonzero) > 0 else 0.0
         
+        import matplotlib.pyplot as plt
         plt.hist(r_periwound_values, bins=50, color='blue', alpha=0.7)
         plt.axvline(periwound_candidate_periwound_thresh, color='red', linestyle='dashed', label=f'Threshold: {periwound_candidate_periwound_thresh:.4f}')
         plt.title('Distribution of r_periwound values')

@@ -231,7 +231,7 @@ def run_colmap_process(video_path, segments, image_options, Masking=False, enhan
     #     for header, param, value in custom_parameters:
     #         ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
 
-    #Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=False)
+    Video_Pipeline(video_path, workspace_path, log_file, segments, image_options, min_sharpness_percentile=sharpness_value, enhance_option=enhance_option, Masking=True, use_mask_adjustment=False)
 
     COLMAP_Pipeline(sharp_image_path, workspace_path,image_mask_path, log_file)
     

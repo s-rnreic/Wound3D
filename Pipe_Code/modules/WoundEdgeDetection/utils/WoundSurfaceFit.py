@@ -8,9 +8,9 @@ from scipy import sparse
 
     
 def fit_constrained_healthy_skin_surface(self,
-                                         alpha: float = 1.0,
-                                         beta: float = 10.0,
-                                         gamma: float = 1.0,
+                                         alpha: float = 0.2,
+                                         beta: float = 0.8,
+                                         gamma: float = 0.8,
                                          periwound_data_weight: float = 1.0,
                                          regularization: float = 1e-8,
                                          enforce_wound_height_floor: bool = True,
@@ -1022,10 +1022,10 @@ def fit_periwound_surface(self,
                             smoothing: float = 0.0,
                             spline_degree: int = 3,
                             return_points: bool = False,
-                            outer_weighting_exponent: float = 0.0,
-                            function_name: str = 'gaussian',
-                            weighting_mode: str = "power",
-                            inner_weight: float = 0.7,
+                            outer_weighting_exponent: float = 0.1,
+                            function_name: str = 'thin_plate',
+                            weighting_mode: str = "linear_floor",
+                            inner_weight: float = 0.80,
                             ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """
     Fit a smooth surface through the current periwound faces and return a mesh or sample points.
