@@ -53,7 +53,7 @@ def test_workspace_paths_are_created_explicitly(tmp_path: Path) -> None:
 
 
 def test_deepskin_masks_use_wound_channel_two_and_tissue_channel_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from Pipe_Code.modules.masking import build_masks
+    from wound3d.legacy.modules.masking import build_masks
 
     input_dir = tmp_path / "images"
     wound_only_dir = tmp_path / "masks_wound_only"

@@ -12,8 +12,9 @@ runs mesh-based wound segmentation.
 
 ## Status
 
-`wound3d` is under active development. The supported command-line interface is implemented in `src/wound3d`; `Pipe_Code`
-contains compatibility and legacy implementation modules that are being migrated incrementally.
+`wound3d` is under active development. All project Python code is contained in the standard `src/wound3d` package.
+The `src/wound3d/legacy` namespace contains implementation modules retained during the staged refactor; new code should
+target the top-level `wound3d` modules and avoid adding new dependencies on legacy internals.
 
 ## Features
 
@@ -114,8 +115,6 @@ After editable installation, this console command is also available:
 ```powershell
 wound3d-pipeline --config .\configs\local.yaml
 ```
-
-`python -m Pipe_Code.main` remains a temporary compatibility entry point; new automation should use `wound3d`.
 
 ## Optional backends
 

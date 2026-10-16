@@ -20,7 +20,7 @@ python scripts/check_release_ready.py
 ## Code structure
 
 - Put supported application code in `src/wound3d`.
-- Treat `Pipe_Code` as a compatibility/legacy implementation layer while migration is in progress.
+- Put transitional implementation modules in `src/wound3d/legacy`; do not add new top-level packages.
 - Put user-editable configuration templates in `configs/`.
 - Put executable maintenance helpers in `scripts/`.
 - Put tests in `tests/`.

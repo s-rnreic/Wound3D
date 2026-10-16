@@ -23,7 +23,7 @@ jobs:
           python -m pip install --no-deps -e .
           python -m pip install PyYAML pytest ruff
       - name: Compile supported code
-        run: python -m compileall -q src Pipe_Code
+        run: python -m compileall -q src scripts
       - name: Run tests
         run: python -m pytest
       - name: Lint supported package and tests

@@ -43,22 +43,14 @@ dev = ["pytest>=8", "ruff>=0.6"]
 wound3d-pipeline = "wound3d.cli:main"
 
 [tool.setuptools]
-package-dir = {"wound3d" = "src/wound3d", "Pipe_Code" = "Pipe_Code"}
-packages = [
-    "wound3d",
-    "Pipe_Code",
-    "Pipe_Code.modules",
-    "Pipe_Code.modules.masking",
-    "Pipe_Code.modules.dense_postprocessing",
-    "Pipe_Code.modules.Mesh_postprocessing",
-    "Pipe_Code.modules.WoundEdgeDetection",
-    "Pipe_Code.modules.sparse_postprocessing",
-    "Pipe_Code.utils",
-]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["wound3d*"]
 
 [tool.setuptools.package-data]
-wound3d = ["resources/*.ini"]
-Pipe_Code = ["base_project.ini"]
+wound3d = ["resources/*.ini", "legacy/base_project.ini"]
 
 [tool.ruff]
 line-length = 120

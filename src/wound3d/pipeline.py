@@ -28,18 +28,18 @@ def _total_elapsed_time(log_file: Path) -> float:
 
 
 def _runtime_modules():
-    """Load existing scientific implementation modules only for a pipeline run."""
-    from Pipe_Code import MVS_Meshing as mvs
-    from Pipe_Code import create_temp_glomap_ini as glomap_ini
-    from Pipe_Code import create_temp_project_ini as project_ini
-    from Pipe_Code import prepare_vid_for_colmap_v5 as video
-    from Pipe_Code import rerun_viewer
-    from Pipe_Code.modules.dense_postprocessing.PointcloudWorkflow import execute_dense_postprocessing
-    from Pipe_Code.modules.masking import build_masks
-    from Pipe_Code.modules.WoundEdgeDetection.Wound_Detection_Mesh import main as execute_segmentation
-    from Pipe_Code.run_command import run_command
-    from Pipe_Code.utils.ArUcoTracking import main as execute_apriltag_scaling
-    from Pipe_Code.utils.read_write_model import write_model
+    """Load legacy scientific implementation modules only for a pipeline run."""
+    from wound3d.legacy import MVS_Meshing as mvs
+    from wound3d.legacy import create_temp_glomap_ini as glomap_ini
+    from wound3d.legacy import create_temp_project_ini as project_ini
+    from wound3d.legacy import prepare_vid_for_colmap_v5 as video
+    from wound3d.legacy import rerun_viewer
+    from wound3d.legacy.modules.dense_postprocessing.PointcloudWorkflow import execute_dense_postprocessing
+    from wound3d.legacy.modules.masking import build_masks
+    from wound3d.legacy.modules.WoundEdgeDetection.Wound_Detection_Mesh import main as execute_segmentation
+    from wound3d.legacy.run_command import run_command
+    from wound3d.legacy.utils.ArUcoTracking import main as execute_apriltag_scaling
+    from wound3d.legacy.utils.read_write_model import write_model
 
     return {
         "mvs": mvs,

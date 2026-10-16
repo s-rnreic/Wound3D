@@ -1,0 +1,1 @@
+"""Legacy masking command-line adapters."""
