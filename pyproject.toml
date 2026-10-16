@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wound3d"
+version = "0.1.0"
+description = "Video-to-3D wound reconstruction pipeline using COLMAP and GLOMAP."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "matplotlib",
+    "tqdm",
+    "rerun-sdk",
+    "requests",
+    "pandas",
+    "ffmpeg-python",
+    "trimesh",
+    "scikit-image",
+    "torch>=2.5.1",
+    "torchvision>=0.20.1",
+    "open3d",
+    "scikit-learn",
+    "PyYAML>=6.0",
+    "pupil-apriltags",
+    "fpsample",
+    "pyfqmr",
+    "pymeshlab",
+    "plyfile",
+    "scipy",
+]
+
+[project.optional-dependencies]
+sam2 = []
+pointcleannet = []
+woundambit = []
+all-backends = ["wound3d[sam2,pointcleannet,woundambit]"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+wound3d-pipeline = "wound3d.cli:main"
+
+[tool.setuptools]
+package-dir = {"wound3d" = "src/wound3d", "Pipe_Code" = "Pipe_Code"}
+packages = [
+    "wound3d",
+    "Pipe_Code",
+    "Pipe_Code.modules",
+    "Pipe_Code.modules.masking",
+    "Pipe_Code.modules.dense_postprocessing",
+    "Pipe_Code.modules.Mesh_postprocessing",
+    "Pipe_Code.modules.WoundEdgeDetection",
+    "Pipe_Code.modules.sparse_postprocessing",
+    "Pipe_Code.utils",
+]
+
+[tool.setuptools.package-data]
+wound3d = ["resources/*.ini"]
+Pipe_Code = ["base_project.ini"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

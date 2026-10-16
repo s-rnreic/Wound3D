@@ -10,22 +10,11 @@ Complete pipeline for pointcloud processing:
 """
 
 import os
-import sys
 import numpy as np
 import fpsample
 import open3d as o3d
 from pathlib import Path
 from typing import Dict, Tuple
-
-# Add paths for imports
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_pipe_code_dir = os.path.abspath(os.path.join(_current_dir, '..', '..'))
-_workspace_root = os.path.abspath(os.path.join(_current_dir, '..', '..', '..'))
-
-if _workspace_root not in sys.path:
-    sys.path.insert(0, _workspace_root)
-if _pipe_code_dir not in sys.path:
-    sys.path.insert(0, _pipe_code_dir)
 
 from Pipe_Code.utils.read_write_model import Camera, Image, Point3D, read_model, qvec2rotmat
 
@@ -451,19 +440,3 @@ def execute_dense_postprocessing(
     print(f"  Output saved to: {output_path}")
     
     return output_path, elapsed_time
-
-
-if __name__ == "__main__":
-    # Configuration
-    dense_model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\dense")
-    output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Fuss1\processed_pointcloud.ply")
-    
-    # Run workflow
-    sampled_pcd = process_pointcloud(
-        dense_model_path=dense_model_path,
-        output_path=output_path,
-        radial_percentile=0.75,  # Keep 75% (remove farthest 25%)
-        target_points=100000,    # Downsample to 100k points
-        SOR_std=1.5,
-        SOR_n=10
-    )

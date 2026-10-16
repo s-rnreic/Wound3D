@@ -51,7 +51,7 @@
 
 import os
 import configparser
-from run_command import run_command
+from Pipe_Code.run_command import run_command
 
 def create_glomap_ini(file_path):
     config = configparser.ConfigParser()
@@ -119,15 +119,3 @@ def execute_glomap(ini_file_path, database_path, output_path, image_path):
         command += f" --{key} {config['GLOMAP'][key]}"
 
     run_command(command)
-
-
-if __name__ == '__main__':
-    import create_temp_project_ini as ctpi
-    custom_parameters = [
-        ('GLOMAP', 'RelPoseEstimation.max_epipolar_error', 20)
-    ]
-    workspace_path = r'Experiments/Experiment_test'
-    ini_path = create_glomap_ini(workspace_path + '\\glomap_config.ini')
-    for header, param, value in custom_parameters:
-            ctpi.insert_keywords_to_project_ini(ini_path, header, param, str(value))
-    #execute_glomap(workspace_path + '\\glomap_config.ini', workspace_path + '\\database.db', workspace_path + '\\sparse')

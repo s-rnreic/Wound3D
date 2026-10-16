@@ -215,12 +215,3 @@ def open_mos_window(database_path: str, trial_id: int =None):
     submit_button.grid(row=6, column=0, columnspan=2)
 
     window.mainloop()
-
-
-if __name__ == '__main__':
-    folder_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\1_reso_005_sharp_no_mask'
-    database_path=r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Trial.db"
-    #setup_database(r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\benchmark')
-    #load_existing_experiments(database_path, folder_path, experiment_description='Trails with 50% resolution and 50% of the number of images', resize_factor=0.5, fraction_of_images=0.5, elapsed_time=75)
-    #insert_MOS(database_path, 6, 1)
-    open_mos_window(database_path)

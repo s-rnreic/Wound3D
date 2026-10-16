@@ -35,16 +35,3 @@ def apply_clahe(image_path: str, clip_limit: float = 2.0, tile_grid_size: tuple 
     enhanced_image = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
 
     return enhanced_image
-
-if __name__ == "__main__":
-    # Example usage
-    input_image_path = r"C:\Users\Reich\LocalCoding\COLMAP_WUNDE\IMG_Data\images_Ferse\Ferse_3_frame_0061.jpg"
-    output_image_path = r"c:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\test_clahe.jpg"
-
-    try:
-        enhanced_image = apply_clahe(input_image_path)
-        # Save the enhanced image
-        cv2.imwrite(output_image_path, enhanced_image)
-        print(f"Enhanced image saved to: {output_image_path}")
-    except FileNotFoundError as e:
-        print(e)

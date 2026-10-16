@@ -1,6 +1,6 @@
 import configparser
 import os
-from run_command import run_command
+from Pipe_Code.run_command import run_command
 
 def setup_project_ini(workspace_path: str, *keywords) -> str:
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -164,20 +164,4 @@ def standard_ini_pipline(workspace_path, image_path, mask_path, Masking=False, *
     if Masking:
         insert_keywords_to_project_ini(ini_path, 'ImageReader', 'mask_path', mask_path)
         insert_keywords_to_project_ini(ini_path, 'StereoFusion', 'mask_path', mask_path)
-    
     return ini_path, database_path
-    
-    
-
-if __name__ == "__main__":
-    workspace_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test'
-    image_path=r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\images"
-    mask_path=r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\mask"
-    ini_path = r'C:\Users\Reich\LocalCoding\COLMAP_Pipline\test\project.ini'
-    standard_ini_pipline(workspace_path=workspace_path, image_path=image_path, mask_path=mask_path)
-    keywords = ['HEADER','ImageReader','SiftExtraction']
-    # setup_project_ini(workspace_path)
-    # insert_keywords_to_project_ini(ini_path, 'HEADER', 'image_path', image_path)
-    temp_ini_path =create_temp_project_ini(ini_path, *keywords)
-    
-    # execute_tepm_project_ini(temp_ini_path, 'feature_extractor')

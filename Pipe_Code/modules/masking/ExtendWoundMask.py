@@ -303,19 +303,3 @@ def create_extended_wound_masks(wound_mask_folder, tissue_mask_folder, output_fo
             creator.visualize_comparison(name, save=True, show=False)
     
     return stats
-
-
-if __name__ == "__main__":
-    # Example usage
-    wound_mask_folder = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\masks_wound_only"
-    tissue_mask_folder = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\masks"
-    output_folder = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\test\masks_wound_extended"
-    
-    # Create extended masks with 70% extension
-    stats = create_extended_wound_masks(
-        wound_mask_folder,
-        tissue_mask_folder,
-        output_folder,
-        extension_percentage=1.0,  # 70% extension
-        visualize_samples=3  # Visualize first 3 samples
-    )

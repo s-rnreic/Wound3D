@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import shutil
 import ffmpeg  # Ensure this is from the ffmpeg-python library
 import pandas as pd
-from utils import image_enhancement as ie
-from utils import CLAHE as clahe
-from utils.SavitzkyGolay import Savitzky_Golay
+from Pipe_Code.utils import CLAHE as clahe
+from Pipe_Code.utils import image_enhancement as ie
+from Pipe_Code.utils.SavitzkyGolay import Savitzky_Golay
 
 
 def extract_images_from_video(input_video, output_path, skip_frames=0):
@@ -476,8 +476,13 @@ def enhance_img(input_folder, destination_folder, method=None, image_options=Non
                                 If None, no enhancement is applied.
         image_options (dict, optional): Additional options for the enhancement method.
     """
-    from utils.image_enhancement import histogram_equalization, gamma_correction, contrast_stretching, adaptive_histogram_equalization
-    from utils.CLAHE import apply_clahe
+    from Pipe_Code.utils.CLAHE import apply_clahe
+    from Pipe_Code.utils.image_enhancement import (
+        adaptive_histogram_equalization,
+        contrast_stretching,
+        gamma_correction,
+        histogram_equalization,
+    )
 
     if not os.path.exists(destination_folder):
         os.makedirs(destination_folder)
@@ -498,93 +503,7 @@ def enhance_img(input_folder, destination_folder, method=None, image_options=Non
                 img = histogram_equalization(img)
             elif method == 'adaptive_histogram_equalization':
                 img = adaptive_histogram_equalization(img)
-            elif method is None:
-                pass  # No enhancement applied
-            else:
+            elif method is not None:
                 raise ValueError(f"Unsupported enhancement method: {method}")
 
-            # Save the (possibly enhanced) image
             cv2.imwrite(os.path.join(destination_folder, file), img)
-
-
-
-
-def main():
-
-    input_path = r"C:\Users\Reich\Interface\Videos\Package_Recordings\old_Roll\Roll_Orbit3.mp4" # or input_path = r"D:\3D-Recon\Yoda\Images_RAW"
-    segments = 50  # or segments = 0.1
-    image_options = {
-        # 'reduce_size': 0.5,
-        # 'square_crop': True,
-        # 'crop' : .8,
-    }
-    mask_folder_path=r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial1\masks"
-    base_dir = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_Sharpness_Thresh\global_sharp\Trial1"
-    # os.makedirs(base_dir, exist_ok=True)
-    raw_images_path = os.path.join(base_dir, 'raw_images')
-    # os.makedirs(raw_images_path, exist_ok=True)
-    sharp_image_path = os.path.join(base_dir, 'sharp_images')
-    # os.makedirs(sharp_image_path, exist_ok=True)
-    #extract_images_from_video(input_path, raw_images_path)
-    # Store sharpness and selected indices for both cases
-    sharpness_results = {}
-    selected_indices_results = {}
-
-    for mask_option in [mask_folder_path, None]:
-        print(f"\n--- Calculating sharpness with mask_folder_path={mask_option} ---")
-        sharpness_values = get_image_sharpness(
-            raw_images_path,
-            mask_folder_path=mask_option,
-            image_options=image_options
-        )
-        sharpness_results[str(mask_option)] = sharpness_values
-        selected_indices = select_sharp_images(
-            sharpness_values,
-            segments,
-            min_sharpness_percentile=90,
-            input_path=None  # We'll plot manually below
-        )
-        selected_indices_results[str(mask_option)] = selected_indices
-
-    # Use sharpness values from the iteration without mask for the plot
-    sharpness_no_mask = sharpness_results["None"]['Sharpness'].values
-    indices_no_mask = selected_indices_results["None"]
-    indices_with_mask = selected_indices_results[str(mask_folder_path)]
-
-    # Save paired indices to a .txt file
-    indices_txt_path = os.path.join(base_dir, 'selected_indices_pairs.txt')
-    with open(indices_txt_path, 'w') as f:
-        for idx_no_mask, idx_with_mask in zip(indices_no_mask, indices_with_mask):
-            f.write(f"{idx_no_mask}\t{idx_with_mask}\n")
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(np.arange(len(sharpness_no_mask)), sharpness_no_mask, label='Sharpness (No Mask)', color='blue')
-    plt.scatter(indices_no_mask, sharpness_no_mask[indices_no_mask], color='green', label='Selected (No Mask)', zorder=5)
-    plt.scatter(indices_with_mask, sharpness_no_mask[indices_with_mask], color='red', label='Selected (With Mask)', marker='x', zorder=6)
-    plt.xlabel('Image Index')
-    plt.ylabel('Sharpness')
-    plt.title('Sharpness and Selected Indices (With/Without Mask)')
-    plt.legend()
-    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(base_dir, 'sharpness_selected_indices_comparison.png'))
-    plt.show()
-    # selected_indices = select_sharp_images(sharpness_values, segments, min_sharpness_percentile=50, input_path=base_dir)
-    # copy_selected_images(selected_indices, raw_images_path, sharp_image_path, image_options)
-
-
-
-if __name__ == "__main__":
-    from Pipe_Code.modules.masking.build_masks import process_folder
-    #enhance_img(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\raw_images", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments_Enhancement_histogram_equalization\sharp_images", method='histogram_equalization')
-    video_path=r"c:\Users\Reich\Interface\Videos\Food_Recordings\Mandarin\Phone\Mandarin_Phone_Orbit2.mp4"
-    base_dir = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine"
-    raw_images_path=base_dir + "\\raw_images"
-    sharp_images_path=r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Sharp_images"
-    mask_path=base_dir + "\\masks"
-    
-    #extract_images_from_video(video_path, raw_images_path, skip_frames=0)
-    # process_folder(raw_images_path, mask_path)
-    sharp_df=get_image_sharpness(raw_images_path, mask_folder_path=None)
-    indices=select_sharp_images(sharp_df, segments=50, absolut_min=10, input_path=base_dir)
-    copy_selected_images(indices, raw_images_path, sharp_images_path)

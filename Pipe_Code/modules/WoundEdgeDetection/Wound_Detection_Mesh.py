@@ -22,7 +22,6 @@ Date: February 2026
 """
 
 import os
-import sys
 import importlib
 import numpy as np
 import time
@@ -32,18 +31,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional, Any
 
-# Add paths for imports
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_pipe_code_dir = os.path.abspath(os.path.join(_current_dir, '..', '..'))
-_workspace_root = os.path.abspath(os.path.join(_current_dir, '..', '..', '..'))
-
-if _workspace_root not in sys.path:
-    sys.path.insert(0, _workspace_root)
-if _pipe_code_dir not in sys.path:
-    sys.path.insert(0, _pipe_code_dir)
-
 #from CODE_Evaluation_Viewer_Align.ICP.Transformation import *
-from utils.read_write_model import read_model, qvec2rotmat
+from Pipe_Code.utils.read_write_model import read_model, qvec2rotmat
 from Pipe_Code.modules.Mesh_postprocessing.MeshSimplification import MeshSimplifier
 
 
@@ -4398,7 +4387,3 @@ def main(workspace_path: str, mesh_path: Path = None, visualization: bool = True
         traceback.print_exc()
         results["error"] = str(e)
         return results
-
-
-if __name__ == "__main__":
-    main("C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\Experiments\\Bein3", r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein3\dense\poisson.ply", visualization=True)

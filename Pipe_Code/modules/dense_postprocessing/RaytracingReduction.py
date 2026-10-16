@@ -22,23 +22,12 @@ Date: February 2026
 """
 
 import os
-import sys
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional, Any
 import cv2
 from collections import defaultdict
 from scipy.spatial import cKDTree
-
-# Add paths for imports
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_pipe_code_dir = os.path.abspath(os.path.join(_current_dir, '..', '..'))
-_workspace_root = os.path.abspath(os.path.join(_current_dir, '..', '..', '..'))
-
-if _workspace_root not in sys.path:
-    sys.path.insert(0, _workspace_root)
-if _pipe_code_dir not in sys.path:
-    sys.path.insert(0, _pipe_code_dir)
 
 # Import required modules
 from Pipe_Code.utils.read_write_model import Camera, Image, Point3D, read_model, qvec2rotmat
@@ -922,41 +911,7 @@ def visualize_reduction(point_coords: np.ndarray,
             rr.log("/voxels/non_wound_voxels", rr.Boxes3D(
                 sizes=[[voxel_size, voxel_size, voxel_size]] * len(sampled_centers),
                 centers=sampled_centers,
-                colors=[100, 100, 255, 50]  # Semi-transparent blue
+                colors=[100, 100, 255, 50],
             ), static=True)
-    
+
     print("Rerun visualization launched")
-
-
-if __name__ == "__main__":
-    """
-    Example usage of the dense pointcloud reduction workflow.
-    """
-    
-    dense_model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\dense")
-    mask_dir = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\dense\images_woundmask")
-    output_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\dense_reduced_voxel.ply")
-
-    # Run voxel-based reduction
-    results = reduce_dense_pointcloud(
-        dense_model_path=dense_model_path,
-        mask_dir=mask_dir,
-        output_path=output_path,
-        # Voxel-based parameters
-        base_voxel_size=0.005,  # 5mm voxels
-        density_wound=0.9,      # Keep 90% of points in wound voxels
-        density_min=0.05,       # Keep 5% of points in far voxels
-        min_votes=8,            # Require 2+ cameras to see point as wound
-        falloff_radius_multiplier=0.1,  # Density falls off over 3x the max distance
-        falloff_type="squared",   # Linear density gradient
-        remove_distant_outliers=True, # Outlier removal
-        outlier_percentile=0.1,  # Remove farthest 10% of non-wound points
-        visualize=True # Visualization
-    )
-
-    print("\n" + "=" * 60)
-    print("VOXEL-BASED REDUCTION COMPLETE")
-    print("=" * 60)
-    print(f"Results saved to: {output_path}")
-
-    

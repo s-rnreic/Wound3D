@@ -12,22 +12,16 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 
-def _add_woundambit_src_to_path() -> None:
-    wrapper_path = Path(__file__).resolve()
-    woundambit_src = wrapper_path.parents[3] / "external" / "woundambit" / "src" / "main"
-    woundambit_src_str = str(woundambit_src)
-    if woundambit_src_str not in sys.path:
-        sys.path.insert(0, woundambit_src_str)
-
-
-# Add WoundAmbit source to sys.path immediately so PathBuilder can be imported at module level
-_add_woundambit_src_to_path()
-
-from medseg.util.path_builder import PathBuilder  # noqa: WPS433, E402
+try:
+    from medseg.util.path_builder import PathBuilder
+except ModuleNotFoundError as error:
+    raise RuntimeError(
+        "WoundAmbit is not installed in this environment. Initialize the external/WoundAmbit submodule and "
+        "install it in the selected environment before running the wrapper."
+    ) from error
 
 
 class FolderOverridePathBuilder(PathBuilder):

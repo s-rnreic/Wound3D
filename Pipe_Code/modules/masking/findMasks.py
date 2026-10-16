@@ -92,19 +92,4 @@ def find_mask_for_image(image_path, mask_folder):
         return str(matching_masks[0])
     
     return None
-
-
-if __name__ == "__main__":
-    # Example usage
-    image_folder = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Sharp_images"
-    mask_folder = r"C:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Ferse\Maske_CombinedLAB"
-    
-    # Find masks for all images in a folder
-    mapping = find_corresponding_masks(image_folder, mask_folder)
-    for img_path, mask_path in mapping.items():
-        if mask_path:
-            print(f"Image: {img_path} -> Mask: {mask_path}")
-        else:
-            print(f"Image: {img_path} -> No mask found")
-    
     

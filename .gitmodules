@@ -7,3 +7,6 @@
 [submodule "external/WoundAmbit"]
 	path = external/WoundAmbit
 	url = https://github.com/s-rnreic/woundambit.git
+[submodule "external/Deepskin"]
+	path = external/Deepskin
+	url = https://github.com/Nico-Curti/Deepskin.git

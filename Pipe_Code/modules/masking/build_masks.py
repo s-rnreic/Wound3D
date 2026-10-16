@@ -6,26 +6,19 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
 import torch
-import sys
 import importlib.util
 
-# Add local module paths for sibling imports
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-if _current_dir not in sys.path:
-    sys.path.insert(0, _current_dir)
-
-# Add SAM2 path to sys.path for potential imports
-sam2_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external', 'sam2')
-sys.path.append(sam2_path)
-
-# Try to import SAM2 modules, but make them optional
+# SAM2 must be installed from the submodule into the active environment, e.g.:
+# python -m pip install -e external/sam2
+# Do not mutate sys.path because that makes the selected SAM2 version dependent
+# on the current working directory and hides installation problems.
 SAM2_AVAILABLE = False
 try:
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
     SAM2_AVAILABLE = True
 except ImportError:
-    print("SAM2 modules not available. SAM2-related functionality will be disabled unless installed.")
+    print("SAM2 is not installed. Install the initialized submodule with: python -m pip install -e external/sam2")
 
 import matplotlib.pyplot as plt
 
@@ -276,8 +269,58 @@ def process_image(image_path, output_folder):
         output_path = os.path.join(output_folder, os.path.basename(image_path) +'.png')
         cv2.imwrite(output_path, mask)
 
-def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=False, Use_WoundAmbit=True, use_mask_adjustment=False, extrude_masks=False, 
-                   min_mask_ratio=0.1, max_mask_ratio=0.8, neighbors_count=3):
+
+def _load_deepskin_segmentation():
+    """Load the cached DeepSkin adapter without modifying the active environment."""
+    try:
+        import deepskin
+        from Pipe_Code.modules.masking.deepskin_wrapper import wound_segmentation
+    except ImportError as error:
+        raise RuntimeError(
+            "DeepSkin is required for this masking workflow but is not installed in the active environment. "
+            "Install the checked-out dependency before running: "
+            "python -m pip install -e external/Deepskin"
+        ) from error
+    del deepskin
+    return wound_segmentation
+
+
+def _create_deepskin_masks(input_folder: str, wound_only_folder: str, wound_tissue_folder: str) -> None:
+    """Create DeepSkin wound-only and wound+tissue masks for an image folder.
+
+    DeepSkin semantic output is ordered as background, body/tissue, wound. The
+    combined mask deliberately excludes the background channel and keeps tissue
+    plus wound; this is required when WoundAmbit is used for wound-only masks.
+    """
+    wound_segmentation = _load_deepskin_segmentation()
+    os.makedirs(wound_only_folder, exist_ok=True)
+    os.makedirs(wound_tissue_folder, exist_ok=True)
+
+    image_names = sorted(
+        name for name in os.listdir(input_folder) if name.lower().endswith((".jpg", ".jpeg", ".png"))
+    )
+    for image_name in image_names:
+        image_path = os.path.join(input_folder, image_name)
+        image_bgr = cv2.imread(image_path)
+        if image_bgr is None:
+            print(f"Failed to read image: {image_name}")
+            continue
+
+        semantic_mask = wound_segmentation(img=cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+        if semantic_mask.ndim != 3 or semantic_mask.shape[2] < 3:
+            raise ValueError(f"DeepSkin returned an invalid semantic mask for: {image_name}")
+
+        tissue_channel = semantic_mask[:, :, 1]
+        wound_channel = semantic_mask[:, :, 0]
+        wound_tissue_mask = np.bitwise_or(wound_channel, tissue_channel)
+
+        # Keep the historical '<image filename>.png' naming convention, e.g. 00001.jpg.png.
+        cv2.imwrite(os.path.join(wound_tissue_folder, image_name + ".png"), wound_tissue_mask)
+
+def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, Use_DeepSkin=False, Use_WoundAmbit=False,
+                   use_mask_adjustment=False, extrude_masks=False, min_mask_ratio=0.1, max_mask_ratio=0.8,
+                   neighbors_count=3, sam2_checkpoint=None, sam2_model_config=None,
+                   woundambit_executable=None, woundambit_working_directory=None):
     """
     Process a folder of images to generate segmentation masks.
     
@@ -300,122 +343,28 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         process_folder('images/', 'masks/', Use_DeepSkin=True, use_mask_adjustment=True)
     """
 
+    mask_outputs_ready = False
+
     if Use_SAM2:
-        
-        checkpoint = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
-        model_cfg = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
+        if sam2_checkpoint is None or sam2_model_config is None:
+            raise ValueError(
+                "SAM2 masking requires 'sam2_checkpoint' and 'sam2_model_config' in the pipeline configuration."
+            )
+        checkpoint = os.fspath(sam2_checkpoint)
+        model_cfg = os.fspath(sam2_model_config)
+        if not os.path.isfile(checkpoint):
+            raise FileNotFoundError(f"SAM2 checkpoint not found: {checkpoint}")
+        if not os.path.isfile(model_cfg):
+            raise FileNotFoundError(f"SAM2 model configuration not found: {model_cfg}")
         result = process_video_with_sam2(input_folder, checkpoint, model_cfg)
         save_masks(result, output_folder)
         return
     
     elif Use_DeepSkin:
-        # Add the current directory to sys.path to import the wrapper
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        
-        # Check if DeepSkin is installed
-        try:
-            from deepskin import wound_segmentation as _original_wound_segmentation
-            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
-            from deepskin_wrapper import wound_segmentation
-            print("DeepSkin module found.")
-        except ImportError:
-            print("DeepSkin module not found. Installing DeepSkin...")
-            import subprocess
-            import shutil
-            import tempfile
-            import stat
-            
-            # Create external directory if it doesn't exist
-            # Go up from Pipe_Code/modules/masking to COLMAP_Pipline root
-            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            external_dir = os.path.join(root_dir, 'external')
-            os.makedirs(external_dir, exist_ok=True)
-            
-            # Path for DeepSkin installation
-            deepskin_dir = os.path.join(external_dir, 'Deepskin')
-            
-            # If Deepskin directory exists, remove it to start fresh
-            if os.path.exists(deepskin_dir):
-                print(f"Removing existing DeepSkin directory at {deepskin_dir}")
-                
-                # Helper function to handle Windows permission errors
-                def handle_remove_readonly(func, path, exc):
-                    """Handle permission errors on Windows when deleting git files"""
-                    if not os.access(path, os.W_OK):
-                        os.chmod(path, stat.S_IWUSR)
-                        func(path)
-                    else:
-                        raise
-                
-                shutil.rmtree(deepskin_dir, onerror=handle_remove_readonly)
-            
-            # Clone DeepSkin repository
-            print("Cloning DeepSkin repository...")
-            subprocess.run(
-                ["git", "clone", "https://github.com/Nico-Curti/Deepskin.git", deepskin_dir],
-                check=True
-            )
-            
-            # Install requirements and package
-            print("Installing DeepSkin requirements...")
-            # Get the Python executable from the active virtual environment
-            python_executable = sys.executable
-            print(f"Using Python executable: {python_executable}")
-            
-            subprocess.run(
-                [python_executable, "-m", "pip", "install", "-r", os.path.join(deepskin_dir, "requirements.txt")],
-                check=True
-            )
-            
-            print("Installing DeepSkin package...")
-            cwd = os.getcwd()
-            os.chdir(deepskin_dir)
-            subprocess.run([python_executable, "-m", "pip", "install", "."], check=True)
-            os.chdir(cwd)
-            
-            # Import after installation
-            from deepskin import wound_segmentation as _original_wound_segmentation
-            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
-            from deepskin_wrapper import wound_segmentation
-            print("DeepSkin installed successfully.")
-        
-  
-        folder_path = input_folder
-        output_path = output_folder
-        # Create output directories for mask channels
+        print("DeepSkin module found.")
         wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_wound_only')
-        wound_tissue_folder = output_folder  # wound + tissue combined
-        os.makedirs(wound_only_folder, exist_ok=True)
-        os.makedirs(wound_tissue_folder, exist_ok=True)
-
-        for img_name in os.listdir(folder_path):
-            img_path = os.path.join(folder_path, img_name)
-            bgr = cv2.imread(img_path)
-            if bgr is None:
-                print(f"Failed to read image: {img_name}")
-                continue
-
-            # Convert the image from BGR to RGB format
-            rgb = bgr[..., ::-1]
-
-            # Get the wound segmentation mask
-            wound_mask = wound_segmentation(img=rgb)
-
-            # Split the mask into channels (background, tissue, wound)
-            wound_channel = wound_mask[:, :, 0]
-            tissue_channel = wound_mask[:, :, 1]
-            background_channel = wound_mask[:, :, 2]
-
-            # Create combined wound+tissue mask
-            combined_mask = np.bitwise_or(wound_channel, tissue_channel)
-            
-            # Save wound-only mask
-            cv2.imwrite(os.path.join(wound_only_folder, img_name + ".png"), wound_channel)
-            
-            # Save wound+tissue combined mask
-            cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
+        _create_deepskin_masks(input_folder, wound_only_folder, output_folder)
+        mask_outputs_ready = True
     
     elif Use_WoundAmbit:
         import subprocess
@@ -423,41 +372,33 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         import stat
         import tempfile
         import uuid
-        
-        from deepskin import wound_segmentation as _original_wound_segmentation
-            # Import our cached wrapper to prevent TensorFlow retracing (same directory)
-        from deepskin_wrapper import wound_segmentation
-        print("DeepSkin module found.")
+
+        if woundambit_executable not in (None, "wsl"):
+            raise ValueError(
+                "The legacy WoundAmbit adapter currently supports only 'wsl' as woundambit_executable. "
+                "Configure masking.woundambit_executable: wsl."
+            )
+        default_woundambit_wrapper_directory = Path(__file__).resolve().parent / "utils"
+        woundambit_working_directory = (
+            Path(woundambit_working_directory)
+            if woundambit_working_directory is not None
+            else default_woundambit_wrapper_directory
+        )
+        woundambit_working_directory = os.fspath(woundambit_working_directory.resolve())
+        if not os.path.isfile(os.path.join(woundambit_working_directory, "WoundAmbitWrapper.py")):
+            raise FileNotFoundError(
+                "WoundAmbitWrapper.py was not found in the configured/default WoundAmbit wrapper directory: "
+                f"{woundambit_working_directory}"
+            )
         
         wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_wound_only')
         wound_tissue_folder = output_folder  # wound + tissue combined
         os.makedirs(wound_only_folder, exist_ok=True)
         os.makedirs(wound_tissue_folder, exist_ok=True)
-        
-        for img_name in os.listdir(input_folder):
-            img_path = os.path.join(input_folder, img_name)
-            bgr = cv2.imread(img_path)
-            if bgr is None:
-                print(f"Failed to read image: {img_name}")
-                continue
 
-            # Convert the image from BGR to RGB format
-            rgb = bgr[..., ::-1]
-
-            # Get the wound segmentation mask
-            wound_mask = wound_segmentation(img=rgb)
-
-            # Split the mask into channels (background, tissue, wound)
-            wound_channel = wound_mask[:, :, 0]
-            tissue_channel = wound_mask[:, :, 1]
-            background_channel = wound_mask[:, :, 2]
-
-            # Create combined wound+tissue mask
-            combined_mask = np.bitwise_or(wound_channel, tissue_channel)
-            
-            # Save wound+tissue combined mask
-            cv2.imwrite(os.path.join(wound_tissue_folder, img_name + ".png"), combined_mask)
-        
+        print("Generating DeepSkin wound+tissue masks for WoundAmbit background removal...")
+        _create_deepskin_masks(input_folder, wound_only_folder, wound_tissue_folder)
+        mask_outputs_ready = True
         
         # Convert Windows paths to WSL paths for the command.
         # Use wslpath first because mapped/network drives are not always represented by /mnt/<drive>/...
@@ -555,7 +496,7 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
             
             cmd = f"""
             set -e
-            cd /mnt/c/Users/Reich/LocalCoding/COLMAP_Pipline/Pipe_Code/modules/masking/utils/
+            cd '{win_to_wsl_path(woundambit_working_directory)}'
             source ~/anaconda3/etc/profile.d/conda.sh
             conda activate woundambit
             python WoundAmbitWrapper.py --input_folder '{input_escaped}' --output_folder '{output_escaped}'
@@ -586,12 +527,12 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
                     shutil.rmtree(stage_dir, ignore_errors=True)
 
         if not woundambit_available:
-            print("Falling back to conservative (LAB-based) segmentation.")
+            print("WoundAmbit was unavailable; retaining DeepSkin wound-only masks as the fallback.")
             Use_WoundAmbit = False
     # Apply mask adjustment if requested
     
     # If WoundAmbit failed or was unavailable, use the conservative (LAB-based) fallback
-    if not Use_WoundAmbit and not Use_SAM2 and not Use_DeepSkin:
+    if not mask_outputs_ready and not Use_WoundAmbit and not Use_SAM2 and not Use_DeepSkin:
         print("\n" + "="*60)
         print("Running Conservative (LAB-based) Segmentation")
         print("="*60)
@@ -607,15 +548,14 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         print("Applying Mask Adjustment Workflow")
         print("="*60)
         
-        # Import MaskAdjustment
-        from MaskAdjustment import MaskAdjustment
+        from Pipe_Code.modules.masking.MaskAdjustment import MaskAdjustment
         
         # Apply to wound+tissue masks
         print("\nAdjusting wound+tissue masks...")
         mask_adjuster = MaskAdjustment(
-            folder_path, 
-            wound_tissue_folder, 
-            wound_tissue_folder,  # Output to same folder
+            input_folder,
+            output_folder,
+            output_folder,  # Output to the configured wound+tissue mask folder
             min_mask_ratio=min_mask_ratio,
             max_mask_ratio=max_mask_ratio,
             neighbors_count=neighbors_count
@@ -635,13 +575,13 @@ def process_folder(input_folder, output_folder, num_workers=4, Use_SAM2=False, U
         mask_adjuster._save_all_masks()
            
     if extrude_masks:
-        from ExtendWoundMask import create_extended_wound_masks
+        from Pipe_Code.modules.masking.ExtendWoundMask import create_extended_wound_masks
         print("Extruding masks...")
         extruded_wound_only_folder = os.path.join(os.path.dirname(output_folder), 'masks_extruded_wound_only')
         os.makedirs(extruded_wound_only_folder, exist_ok=True)
         stats = create_extended_wound_masks(
-            wound_only_folder,
-            wound_tissue_folder,
+            os.path.join(os.path.dirname(output_folder), 'masks_wound_only'),
+            output_folder,
             extruded_wound_only_folder,
             extension_percentage=1.0,  # 70% extension
             visualize_samples=0  # Visualize first 3 samples
@@ -816,30 +756,3 @@ def crop_masks(input_folder):
         
        
         cv2.imwrite(os.path.join(input_folder, filename), combined_mask_cropped)
-        
-if __name__ == '__main__':
-    # Your multiprocessing code here
-    # Example usage
-    
-    USE_SAM2 = False
-    USE_DEEPSKIN = True
-    
-    # checkpoint_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\checkpoints\sam2.1_hiera_base_plus.pt"
-    # config_dir = r"C:\Users\Reich\LocalCoding\SfM_Pipeline_alternative\wundpro_vid2cloud\external\sam2\sam2\configs\sam2.1\sam2.1_hiera_b+.yaml"
-    img_folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Test1\sharp_images"
-    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Test1\masks"
-
-
-    # #Masking with SAM2
-    # if USE_SAM2:
-    #     result = process_video_with_sam2(img_folder_path, checkpoint_dir, config_dir, interactive=False)
-    #     save_masks(result, output_path)
-
-    #Masking with DeepSkin
-    if USE_DEEPSKIN:
-        process_folder(img_folder_path, output_path, Use_DeepSkin=True, use_mask_adjustment=False, Use_WoundAmbit=False)
-    else:
-        process_folder(img_folder_path, output_path, Use_SAM2=USE_SAM2, Use_DeepSkin=USE_DEEPSKIN)
-    #crop_masks(r"c:\Users\Reich\LocalCoding\Wundbilder\Wundbilder_XotoCAM\Mandarine\Maske_SAM2_cropped")
-    # Example: Rename all mask files in a folder to .jpg format
-    output_folder_full = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Bein4\masks_wound_only")

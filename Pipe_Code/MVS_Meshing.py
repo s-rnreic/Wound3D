@@ -5,7 +5,7 @@ import threading
 import shutil
 import trimesh
 from pathlib import Path
-from run_command import run_command
+from Pipe_Code.run_command import run_command
 from Pipe_Code.modules.masking.mask_undistortion import undistort_masks_with_colmap
 
 def execute_poisson_meshing(folder_path, input_ply=None):
@@ -131,17 +131,3 @@ def _flatten_undistorted_masks(output_dir: Path) -> None:
         elif item.is_file() and item.suffix.lower() != ".png":
             # Remove non-png files (shouldn't exist, but clean up if present)
             item.unlink()
-
-if __name__ == "__main__":
-    # Execute dense reconstruction for every folder in the Experiments directory
-    experiments_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\SALVE_Trials"
-    execute_poisson_meshing(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\SALVE_Trials\SD_2")
-    # for folder_name in os.listdir(experiments_path):
-    #     folder_path = os.path.join(experiments_path, folder_name)
-    #     if os.path.isdir(folder_path):
-    #         print(f"Processing folder: {folder_path}")
-    #         try:
-    #             execute_poisson_meshing(folder_path)
-    #         except ValueError as e:
-    #             print(f"Error processing {folder_path}: {e}")
-

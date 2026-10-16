@@ -14,8 +14,6 @@ import numpy.typing as npt
 import requests
 import rerun as rr  # pip install rerun-sdk
 from tqdm import tqdm
-import sys
-sys.path.append('C:\\Users\\Reich\\LocalCoding\\COLMAP_Pipline\\external')  # Add this line
 from Pipe_Code.utils.read_write_model import Camera, read_model  # type: ignore[attr-defined]
 import matplotlib.pyplot as plt
 

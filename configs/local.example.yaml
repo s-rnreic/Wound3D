@@ -1,0 +1,32 @@
+# Copy this file to configs/local.yaml. That local file is ignored by Git.
+# On Windows, prefer forward slashes (C:/Users/...) or single-quoted backslash paths.
+# Do not use double-quoted backslash paths because YAML treats backslashes as escapes.
+input_video: 'C:\Users\Reich\Interface\Videos\WoundPaperRecording\Operator_Roman\Model2\29.mp4'
+workspace: 'C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test'
+
+processing:
+  segments: 10
+  resize_factor: 1.0
+  sharpness_percentile: 25.0
+  enhance_option: null
+
+masking:
+  enabled: true
+  # One of: conservative, sam2, woundambit, deepskin
+  backend: woundambit
+  use_adjustment: false
+  extrude_masks: true
+  min_mask_ratio: 0.05
+  max_mask_ratio: 0.5
+  neighbors_count: 3
+  # Example paths when backend is sam2:
+  sam2_checkpoint: ../external/sam2/checkpoints/sam2.1_hiera_base_plus.pt
+  sam2_model_config: ../external/sam2/sam2/configs/sam2.1/sam2.1_hiera_b+.yaml
+  # For WoundAmbit, configure the external command/environment. The in-repository wrapper location is automatic.
+  woundambit_executable: null
+
+reconstruction:
+  tag_size_m: 0.0123
+  use_pointcleannet: false
+  run_rerun_filter: true
+  run_apriltag_scaling: true

@@ -137,12 +137,3 @@ def msrcp(img, sigma_scales=[15, 80, 250], low_per=1, high_per=1):
     msrcp = np.clip(np.expand_dims(A, 2) * img, 0.0, 255.0)
 
     return msrcp.astype(np.uint8)
-
-if __name__ == "__main__":
-    # Example usage
-    img = cv2.imread(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\sd.jpg")
-    msrcr_img = msrcr(img, sigma_scales=[15, 80, 250], alpha=125, beta=46, G=192, b=-30, low_per=1, high_per=1)
-    # Save the processed image instead of displaying it
-    output_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Test\test2.jpg"
-    cv2.imwrite(output_path, msrcr_img)
-    print(f"Processed image saved to: {output_path}")

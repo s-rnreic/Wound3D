@@ -6,7 +6,7 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from collections import deque
 import math
-from findMasks import find_corresponding_masks
+from Pipe_Code.modules.masking.findMasks import find_corresponding_masks
 from pathlib import Path
 from tqdm import tqdm  # For progress display during loading
 
@@ -266,10 +266,6 @@ class MaskAdjustment:
                     valid_indices.append(i)
                     valid_areas.append(props['area_ratio'])
         
-        if len(valid_areas) < window_size:
-            # Not enough valid points for the window size
-            window_size = max(5, len(valid_areas) - (len(valid_areas) % 2 == 0))  # Ensure odd window
-        
         if len(valid_areas) < 3:
             print("Warning: Not enough valid masks for Savitzky-Golay filtering. Using simple averaging.")
             # Use simple averaging instead
@@ -278,9 +274,21 @@ class MaskAdjustment:
                 if img_path in self.mask_properties:
                     self.mask_properties[img_path]['savitzky_area'] = avg_area
             return
+
+        # scipy.signal.savgol_filter requires an odd window length that is not
+        # larger than the input sequence and strictly larger than polyorder.
+        # Short videos may contain fewer than the default 15 valid masks.
+        window_size = min(window_size, len(valid_areas))
+        if window_size % 2 == 0:
+            window_size -= 1
+        polynomial_order = min(polynomial_order, window_size - 1)
         
         # Apply filter to valid areas
-        smoothed_valid_areas = savgol_filter(valid_areas, window_size, polynomial_order)
+        smoothed_valid_areas = savgol_filter(
+            valid_areas,
+            window_length=window_size,
+            polyorder=polynomial_order,
+        )
         
         # Create a mapping from indices to smoothed values
         index_to_smoothed = {}
@@ -686,7 +694,7 @@ class MaskAdjustment:
                     
                     
                     # Create comparison visualization
-                    self._visualize_adjustment(image, original_mask, adjusted_mask, img_path)
+                    #self._visualize_adjustment(image, original_mask, adjusted_mask, img_path)
         
         return adjusted_masks
     

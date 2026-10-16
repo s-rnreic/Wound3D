@@ -5,7 +5,6 @@ Handles PLY to XYZ conversion automatically.
 """
 
 import os
-import sys
 import tempfile
 import shutil
 import numpy as np
@@ -175,14 +174,14 @@ def denoise_pointcloud(input_ply, output_ply, num_iterations=3, model_dir=None, 
         with open(dataset_file, 'w') as f:
             f.write("cloud_0.xyz\n")
         
-        # Import PointCleanNet denoising module
-        noise_removal_path = str(POINTCLEANNET_ROOT / "noise_removal")
-        if noise_removal_path in sys.path:
-            sys.path.remove(noise_removal_path)
-        sys.path.insert(0, noise_removal_path)
-        import eval_pcpnet as denoise_module
-        eval_pcpnet_denoise = denoise_module.eval_pcpnet
-        sys.path.remove(noise_removal_path)
+        try:
+            from pointcleannet.noise_removal.eval_pcpnet import eval_pcpnet as eval_pcpnet_denoise
+        except ModuleNotFoundError as error:
+            raise RuntimeError(
+                "PointCleanNet is enabled but not installed as an importable package. "
+                "Install/configure external/PointCleanNet in the active environment before setting "
+                "reconstruction.use_pointcleannet: true."
+            ) from error
         
         # Run denoising iterations
         for i in range(num_iterations):
@@ -271,14 +270,14 @@ def remove_outliers(input_ply, output_ply, threshold=0.5, model_dir=None):
         with open(shapes_file, 'w') as f:
             f.write("cloud\n")
         
-        # Import PointCleanNet outlier removal module
-        outliers_removal_path = str(POINTCLEANNET_ROOT / "outliers_removal")
-        if outliers_removal_path in sys.path:
-            sys.path.remove(outliers_removal_path)
-        sys.path.insert(0, outliers_removal_path)
-        import eval_pcpnet as outliers_module
-        eval_pcpnet_outliers = outliers_module.eval_pcpnet
-        sys.path.remove(outliers_removal_path)
+        try:
+            from pointcleannet.outliers_removal.eval_pcpnet import eval_pcpnet as eval_pcpnet_outliers
+        except ModuleNotFoundError as error:
+            raise RuntimeError(
+                "PointCleanNet is enabled but not installed as an importable package. "
+                "Install/configure external/PointCleanNet in the active environment before setting "
+                "reconstruction.use_pointcleannet: true."
+            ) from error
         
         # Create arguments object
         class Args:
@@ -369,89 +368,14 @@ def clean_pointcloud(input_ply, output_ply, denoise=True, remove_outliers_flag=T
         elif remove_outliers_flag:
             # Only outlier removal
             remove_outliers(input_ply, output_ply, threshold=outlier_threshold)
-            
         elif denoise:
             # Only denoising
             denoise_pointcloud(input_ply, output_ply, num_iterations=num_iterations)
-            
         else:
-            # Nothing to do, just copy
+            # No operation selected: retain the input exactly.
             shutil.copy(input_ply, output_ply)
-            
     finally:
-        # Clean up temporary file
         if temp_file and os.path.exists(temp_file):
             os.remove(temp_file)
-    
+
     return output_ply
-
-
-if __name__ == "__main__":
-    """
-    Example usage of PointCleanNet wrapper
-    """
-    # Example paths - adjust to your actual data
-    workspace_root = Path(__file__).parent.parent.parent.parent
-    
-    # Example 1: Denoise only
-    print("=" * 60)
-    print("Example 1: Denoising a point cloud")
-    print("=" * 60)
-    
-    input_file = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\sor_cleaned_pointcloud.ply")
-    output_file = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\denoised_pointcloud.ply")
-    
-    # Check if input exists
-    if input_file.exists():
-        denoise_pointcloud(
-            input_ply=str(input_file),
-            output_ply=str(output_file),
-            num_iterations=1,
-            n_neighbours=100
-        )
-        print(f"\n✓ Denoised point cloud saved to: {output_file}")
-    else:
-        print(f"⚠ Input file not found: {input_file}")
-        print("\nTo use this example, provide a valid PLY file path:")
-        print("  input_file = 'path/to/your/pointcloud.ply'")
-    
-    #Example 2: Remove outliers only
-    print("\n" + "=" * 60)
-    print("Example 2: Removing outliers")
-    print("=" * 60)
-    
-    output_file_outliers = output_file = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\outlier_pointcloud.ply")
-    
-    if input_file.exists():
-        remove_outliers(
-            input_ply=str(input_file),
-            output_ply=str(output_file_outliers),
-            threshold=0.5
-        )
-        print(f"\n✓ Cleaned point cloud saved to: {output_file_outliers}")
-    else:
-        print(f"⚠ Input file not found: {input_file}")
-    
-    # Example 3: Complete cleaning (outliers + denoising)
-    print("\n" + "=" * 60)
-    print("Example 3: Complete cleaning (outliers + denoising)")
-    print("=" * 60)
-    
-    output_file_clean = workspace_root / "Experiments" / "test_Knete_20ml_4K" / "dense" / "dense_cleaned.ply"
-    
-    if input_file.exists():
-        clean_pointcloud(
-            input_ply=str(input_file),
-            output_ply=str(output_file_clean),
-            denoise=True,
-            remove_outliers_flag=True,
-            num_iterations=3,
-            outlier_threshold=0.5
-        )
-        print(f"\n✓ Fully cleaned point cloud saved to: {output_file_clean}")
-    else:
-        print(f"⚠ Input file not found: {input_file}")
-    
-    print("\n" + "=" * 60)
-    print("Examples complete!")
-    print("=" * 60)

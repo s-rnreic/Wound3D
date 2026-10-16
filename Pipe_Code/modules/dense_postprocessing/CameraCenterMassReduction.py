@@ -13,22 +13,10 @@ This approach is better than center-of-mass for objects captured in a typical
 camera setup, as it finds the point the cameras are "looking at".
 """
 
-import os
-import sys
 import numpy as np
 from pathlib import Path
 from typing import Dict, Tuple, List
 import rerun as rr
-
-# Add paths for imports
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_pipe_code_dir = os.path.abspath(os.path.join(_current_dir, '..', '..'))
-_workspace_root = os.path.abspath(os.path.join(_current_dir, '..', '..', '..'))
-
-if _workspace_root not in sys.path:
-    sys.path.insert(0, _workspace_root)
-if _pipe_code_dir not in sys.path:
-    sys.path.insert(0, _pipe_code_dir)
 
 from Pipe_Code.utils.read_write_model import Camera, Image, Point3D, read_model, qvec2rotmat
 
@@ -223,26 +211,6 @@ def visualize_camera_reduction(points3D: Dict[int, Point3D],
             ), static=True)
     
     print("\nRerun visualization launched!")
-
-
-if __name__ == "__main__":
-    # Configuration
-    dense_model_path = Path(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Experiments_WoundDetection\Ferse1\dense")
-    
-    print("=" * 60)
-    print("Camera Ray Intersection Based Pointcloud Reduction")
-    print("=" * 60)
-    
-    # Load COLMAP model
-    print(f"\nLoading COLMAP model from: {dense_model_path}")
-    cameras, images, points3D = read_model(dense_model_path, ext=".bin")
-    print(f"Loaded {len(points3D)} points and {len(images)} cameras")
-    
-    # Extract camera poses
-    print("\nExtracting camera poses...")
-    camera_positions, camera_directions = extract_camera_poses(images)
-    print(f"  Camera positions shape: {camera_positions.shape}")
-    print(f"  Camera directions shape: {camera_directions.shape}")
     
     # Find ray intersection point
     print("\nCalculating camera ray intersection point...")

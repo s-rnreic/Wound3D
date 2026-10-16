@@ -1,0 +1,32 @@
+# Version-controlled defaults. Copy local.example.yaml to local.yaml and set your paths.
+input_video: null
+workspace: outputs/example_run
+
+processing:
+  segments: 10
+  resize_factor: 1.0
+  sharpness_percentile: 25.0
+  enhance_option: null
+
+masking:
+  enabled: true
+  # One of: conservative, sam2, woundambit, deepskin
+  backend: conservative
+  use_adjustment: false
+  extrude_masks: true
+  min_mask_ratio: 0.05
+  max_mask_ratio: 0.5
+  neighbors_count: 3
+  # Required only when backend is sam2. Relative paths are resolved from this configuration file.
+  sam2_checkpoint: null
+  sam2_model_config: null
+  # WoundAmbit supplies wound-only masks. It also requires DeepSkin to create the wound+tissue background-removal masks.
+  # The wrapper directory defaults to Pipe_Code/modules/masking/utils. Set it only to override that location.
+  woundambit_executable: null
+  woundambit_working_directory: null
+
+reconstruction:
+  tag_size_m: 0.0123
+  use_pointcleannet: false
+  run_rerun_filter: true
+  run_apriltag_scaling: true

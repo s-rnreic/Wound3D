@@ -2,16 +2,11 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 from pupil_apriltags import Detector
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from Pipe_Code.utils.read_write_model import Camera, Image, Point3D, qvec2rotmat, read_model, write_model
 
@@ -358,17 +353,3 @@ def main(workspace_path: str, Tag_size: float) -> None:
         
     print("AprilTag-based scaling completed successfully. Scale factor: {:.6f} m / COLMAP unit".format(scale_factor))
     return scale_factor
-
-if __name__ == "__main__":
-    main(r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\Ferse_ArUco2", 0.0123)
-    # folder_path = r"C:\Users\Reich\LocalCoding\COLMAP_Pipline\Experiments\AprilTags_Scaling\Ferse\images"
-    # for img in os.listdir(folder_path):
-    #     img_path = os.path.join(folder_path, img)
-    #     img = cv2.imread(img_path)
-    #     img = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2))
-    #     detector = create_detector()
-    #     detections = detect_apriltags(img, detector)
-    #     annotated = annotate_detections(img, detections)
-    #     cv2.imshow("AprilTags", annotated)
-    #     cv2.waitKey(0)
-    
