@@ -1,20 +1,13 @@
+![Demo](git_images\wound3d.gif)
+
+
+
 # wound3d
 
-Video-to-3D wound reconstruction research software built around COLMAP and GLOMAP. The pipeline extracts sharp video
-frames, optionally creates masks, reconstructs sparse and dense geometry, performs point-cloud and mesh processing, and
-runs mesh-based wound segmentation.
-
-> **Research-use only.** This project is not a medical device and is not validated for diagnosis, treatment, or clinical
-> decision-making. Read the [medical and research-use disclaimer](docs/medical-use-disclaimer.md) before using it with
-> wound imagery.
+`wound3d` reconstructs a 3D wound model from a video. The pipeline extracts frames, selects sharp images, creates optional
+masks, performs sparse and dense reconstruction, generates a mesh, and runs mesh-based wound segmentation.
 
 ![Pipeline overview](git_images/Pipeline_Roadmap-Page-2.svg)
-
-## Status
-
-`wound3d` is under active development. All project Python code is contained in the standard `src/wound3d` package.
-The `src/wound3d/legacy` namespace contains implementation modules retained during the staged refactor; new code should
-target the top-level `wound3d` modules and avoid adding new dependencies on legacy internals.
 
 ## Features
 
@@ -26,41 +19,76 @@ target the top-level `wound3d` modules and avoid adding new dependencies on lega
 - Dense point-cloud post-processing and optional PointCleanNet integration
 - Mesh-based wound-edge segmentation
 
-## Requirements
+## Pipeline workflow
 
-### System tools
+Given an input video, the pipeline performs these stages:
 
-Install these separately and ensure they are available on `PATH`:
+1. Extract video frames.
+2. Measure frame sharpness and select sharp images.
+3. Create optional image masks.
+4. Run COLMAP feature extraction and matching.
+5. Run GLOMAP sparse reconstruction.
+6. Optionally filter/visualize the sparse model and apply AprilTag scaling.
+7. Run COLMAP dense reconstruction.
+8. Post-process the dense point cloud.
+9. Generate a Poisson mesh.
+10. Run three-dimensional wound-edge segmentation.
 
-- [COLMAP](https://colmap.github.io/)
-- GLOMAP
-- FFmpeg
-- Git
+## Code layout
 
-A CUDA-capable GPU and a PyTorch/CUDA combination compatible with the selected optional backend may be required.
+The application package is located in:
 
-### Python
+```text
+src/wound3d/
+```
 
-- Python 3.10 or newer
-- Windows is the primary development environment; WoundAmbit currently requires its separately configured runtime
-  environment, commonly WSL
+The main user-facing modules are:
+
+```text
+src/wound3d/cli.py         Command-line execution
+src/wound3d/config.py      YAML configuration loading
+src/wound3d/pipeline.py    Pipeline orchestration
+src/wound3d/workspace.py   Generated workspace paths
+```
+
+Existing reconstruction, masking, post-processing, and segmentation implementation modules are currently located in:
+
+```text
+src/wound3d/legacy/
+```
 
 ## Installation
 
-Clone with optional backend source repositories:
+### Requirements
+
+Install the following external programs and make sure they are available on `PATH`:
+
+```text
+COLMAP
+GLOMAP
+FFmpeg
+Git
+```
+
+Python 3.10 or newer is required. A CUDA-capable GPU and a compatible PyTorch/CUDA installation may be required by the
+selected masking backend.
+
+### Install the package
+
+Clone the repository together with its external submodules:
 
 ```powershell
 git clone --recurse-submodules <repository-url>
 cd COLMAP_Pipline
 ```
 
-For an existing clone:
+For an existing clone, initialize the submodules with:
 
 ```powershell
 git submodule update --init --recursive
 ```
 
-Create and activate an environment, then install the package:
+Create and activate a Python environment, then install the pipeline:
 
 ```powershell
 python -m venv .venv
@@ -69,106 +97,93 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-For tests and linting:
+Optional masking and post-processing backends must be installed/configured separately when selected in the YAML
+configuration.
 
-```powershell
-python -m pip install -e .[dev]
-```
+## Configure a run
 
-## Configuration
-
-Copy the public template; the local configuration is ignored by Git:
+Create a local configuration file from the example:
 
 ```powershell
 Copy-Item .\configs\local.example.yaml .\configs\local.yaml
 ```
 
-Set at least these fields in `configs/local.yaml`:
+Set the input video and output workspace in `configs/local.yaml`:
 
 ```yaml
 input_video: C:/path/to/input_video.mp4
 workspace: C:/path/to/wound3d_workspace
 
+processing:
+  segments: 10
+  resize_factor: 1.0
+  sharpness_percentile: 25.0
+
 masking:
+  enabled: true
   backend: conservative
+
+reconstruction:
+  tag_size_m: 0.0123
+  use_pointcleannet: false
 ```
 
-Use forward slashes in Windows YAML paths, or use single-quoted paths with backslashes. Do not use double-quoted
-backslash paths because YAML treats backslashes as escape characters.
+Available masking backends are:
 
-See `configs/default.yaml` for all supported options.
+```text
+conservative
+sam2
+deepskin
+woundambit
+```
 
-## Run
+For Windows paths in YAML, use forward slashes such as `C:/path/to/file.mp4`, or use single-quoted backslash paths.
+
+## Execute the pipeline
+
+Run the pipeline with:
 
 ```powershell
 python -m wound3d --config .\configs\local.yaml
 ```
 
-Or use the PowerShell helper:
-
-```powershell
-.\scripts\run_pipeline.ps1 -Config .\configs\local.yaml
-```
-
-After editable installation, this console command is also available:
+After installing the package, the equivalent console command is:
 
 ```powershell
 wound3d-pipeline --config .\configs\local.yaml
 ```
 
-## Optional backends
+## Generated workspace structure
 
-Optional backends are not downloaded, cloned, or installed during a reconstruction run. Initialize submodules and install
-or configure the selected backend before enabling it in YAML.
-
-| Backend | YAML selection | Setup summary |
-| --- | --- | --- |
-| Conservative masks | `masking.backend: conservative` | Included; no external model required. |
-| SAM2 | `masking.backend: sam2` | Install `external/sam2` into the active environment and provide checkpoint/config paths. |
-| DeepSkin | `masking.backend: deepskin` | Install `external/Deepskin` into the active environment. |
-| WoundAmbit | `masking.backend: woundambit` | Configure its dedicated environment and `woundambit_executable` when required. The repository's `WoundAmbitWrapper.py` location is detected automatically. DeepSkin must also be installed: it generates the wound+tissue mask used for background removal, while WoundAmbit supplies the wound-only mask. |
-| PointCleanNet | `reconstruction.use_pointcleannet: true` | Configure `external/PointCleanNet` as an importable package. |
-
-Read [third-party software and optional backends](docs/third-party-software.md) before redistribution or model use.
-
-## Output workspace
-
-A run writes generated artifacts below the configured workspace, for example:
+The configured `workspace` directory contains all files generated for one run:
 
 ```text
 workspace/
-├── raw_images/
-├── sharp_images/
-├── masks/
-├── masks_wound_only/
+├── raw_images/                     Extracted video frames
+├── sharp_images/                   Frames selected for reconstruction
+├── masks/                          Wound + tissue masks used for reconstruction
+├── masks_wound_only/               Wound-only masks
+├── masks_extruded_wound_only/      Extended wound masks when mask extrusion is enabled
 ├── sparse/
-│   └── 0/
-├── dense/
-├── database.db
-├── project.ini
-├── glomap_config.ini
-└── pipeline_times.log
+│   └── 0/                          Sparse COLMAP/GLOMAP model
+├── dense/                          Dense reconstruction, point cloud, and mesh outputs
+├── database.db                     COLMAP database
+├── project.ini                     COLMAP project configuration
+├── TempProject.ini                 Temporary COLMAP command configuration
+├── total_project.ini               Combined COLMAP/GLOMAP configuration record
+├── glomap_config.ini               GLOMAP configuration
+└── pipeline_times.log              Per-stage execution timing
 ```
 
-These files are intentionally ignored by Git. Do not commit reconstruction outputs, patient images/videos, masks, model
-weights, or local configuration.
+Important dense outputs typically include:
 
-## Development
-
-```powershell
-python -m pytest
-ruff check src tests
-python scripts/check_release_ready.py
+```text
+dense/fused.ply
+dense/processed_pointcloud.ply
+dense/poisson.ply
 ```
 
-The release check detects tracked bytecode, model weights, generated geometry, local configuration, output folders, and
-submodule problems. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/release-checklist.md](docs/release-checklist.md).
-
-## Privacy and responsible use
-
-Do not upload or commit protected health information, identifiable patient data, or derived artifacts without the required
-permissions. Users are responsible for consent, ethics approval, institutional review, and compliance with applicable
-data-protection requirements.
+> **Research use only.** This software is not a medical device and is not intended for clinical diagnosis or treatment.
 
 ## License and citation
 

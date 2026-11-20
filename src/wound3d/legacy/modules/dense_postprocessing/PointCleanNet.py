@@ -5,6 +5,8 @@ Handles PLY to XYZ conversion automatically.
 """
 
 import os
+import importlib.util
+import sys
 import tempfile
 import shutil
 import numpy as np
@@ -12,7 +14,37 @@ import torch
 from pathlib import Path
 
 # Add PointCleanNet to path
-POINTCLEANNET_ROOT = Path(__file__).parent.parent.parent.parent / "external" / "PointCleanNet"
+POINTCLEANNET_ROOT = Path(__file__).parent.parent.parent.parent.parent.parent / "external" / "PointCleanNet"
+
+
+def _load_pointcleannet_evaluator(task):
+    """Load a bundled PointCleanNet evaluator from its legacy source tree."""
+    task_dir = POINTCLEANNET_ROOT / task
+    evaluator_path = task_dir / "eval_pcpnet.py"
+    if not evaluator_path.exists():
+        raise FileNotFoundError(f"PointCleanNet evaluator not found: {evaluator_path}")
+
+    # The upstream evaluator imports task-local modules such as ``dataset`` and
+    # ``pcpnet`` as top-level modules, so its task directory must be importable.
+    task_dir_string = str(task_dir)
+    if task_dir_string not in sys.path:
+        sys.path.insert(0, task_dir_string)
+
+    # Both PointCleanNet tasks import their local files as generic top-level
+    # modules (``dataset``, ``pcpnet``). Remove a module loaded by the other
+    # task so Python does not accidentally reuse the wrong implementation.
+    for module_name in ("dataset", "pcpnet"):
+        sys.modules.pop(module_name, None)
+
+    module_name = f"pointcleannet_{task}_eval_pcpnet"
+    spec = importlib.util.spec_from_file_location(module_name, evaluator_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load PointCleanNet evaluator: {evaluator_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module.eval_pcpnet
 
 
 def read_ply(ply_path):
@@ -175,12 +207,11 @@ def denoise_pointcloud(input_ply, output_ply, num_iterations=3, model_dir=None, 
             f.write("cloud_0.xyz\n")
         
         try:
-            from pointcleannet.noise_removal.eval_pcpnet import eval_pcpnet as eval_pcpnet_denoise
-        except ModuleNotFoundError as error:
+            eval_pcpnet_denoise = _load_pointcleannet_evaluator("noise_removal")
+        except (ImportError, ModuleNotFoundError) as error:
             raise RuntimeError(
-                "PointCleanNet is enabled but not installed as an importable package. "
-                "Install/configure external/PointCleanNet in the active environment before setting "
-                "reconstruction.use_pointcleannet: true."
+                "The bundled PointCleanNet denoising evaluator could not be loaded. "
+                f"Check the installation at {POINTCLEANNET_ROOT}."
             ) from error
         
         # Run denoising iterations
@@ -202,9 +233,9 @@ def denoise_pointcloud(input_ply, output_ply, num_iterations=3, model_dir=None, 
             opt.n_neighbours = n_neighbours
             opt.sparse_patches = False
             opt.sampling = 'full'
-            opt.patches_per_shape = 20000
+            opt.patches_per_shape = 5000
             opt.seed = 40938661
-            opt.batchSize = 512
+            opt.batchSize = 256
             opt.workers = 0
             opt.cache_capacity = 10
             opt.nrun = i + 1
@@ -271,12 +302,11 @@ def remove_outliers(input_ply, output_ply, threshold=0.5, model_dir=None):
             f.write("cloud\n")
         
         try:
-            from pointcleannet.outliers_removal.eval_pcpnet import eval_pcpnet as eval_pcpnet_outliers
-        except ModuleNotFoundError as error:
+            eval_pcpnet_outliers = _load_pointcleannet_evaluator("outliers_removal")
+        except (ImportError, ModuleNotFoundError) as error:
             raise RuntimeError(
-                "PointCleanNet is enabled but not installed as an importable package. "
-                "Install/configure external/PointCleanNet in the active environment before setting "
-                "reconstruction.use_pointcleannet: true."
+                "The bundled PointCleanNet outlier evaluator could not be loaded. "
+                f"Check the installation at {POINTCLEANNET_ROOT}."
             ) from error
         
         # Create arguments object
@@ -293,10 +323,10 @@ def remove_outliers(input_ply, output_ply, threshold=0.5, model_dir=None):
         opt.parmpostfix = '_params.pth'
         opt.sparse_patches = False
         opt.sampling = 'full'
-        opt.patches_per_shape = 20000
+        opt.patches_per_shape = 5000
         opt.seed = 40938661
-        opt.batchSize = 512
-        opt.workers = 0
+        opt.batchSize = 256
+        opt.workers = 4
         opt.cache_capacity = 10
         opt.shapename = 'cloud'  # Will be formatted by PointCleanNet as cloud.xyz
         
@@ -338,7 +368,7 @@ def remove_outliers(input_ply, output_ply, threshold=0.5, model_dir=None):
 def clean_pointcloud(input_ply, output_ply, denoise=True, remove_outliers_flag=True,
                      num_iterations=3, outlier_threshold=0.5):
     """
-    Complete point cloud cleaning: outlier removal followed by denoising.
+    Complete point cloud cleaning: outlier removal followed by denoising using the pointcleanNet.
     
     Args:
         input_ply: Path to input PLY file
@@ -379,3 +409,8 @@ def clean_pointcloud(input_ply, output_ply, denoise=True, remove_outliers_flag=T
             os.remove(temp_file)
 
     return output_ply
+
+if __name__ == "__main__":
+    input_ply=r"E:\Test_for_Paper\PointCleanNet_Test\M3_A_001\dense\processed_pointcloud.ply"
+    output_ply=r"E:\Test_for_Paper\PointCleanNet_Test\M3_A_001\dense\processed_pointcloud_pointnet.ply"
+    clean_pointcloud(input_ply, output_ply)
