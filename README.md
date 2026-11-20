@@ -1,4 +1,4 @@
-![Demo](git_images\wound3d.gif)
+![Demo](git_images/wound3d.gif)
 
 
 
